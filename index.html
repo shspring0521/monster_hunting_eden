@@ -564,8 +564,8 @@ const Arena = {
 const BASIC_IDS = ['cannon', 'sword', 'claw'];
 const TRAITS = ['', '', '특성: 룬석 칸 +1 (5칸)  흡혈 룬석 기본 장착'];
 
-/** 레벨업 필요 경험치: 5레벨 단위로 100씩 증가 */
-const xpRequired = lv => (Math.floor((lv - 1) / 5) + 1) * 100;
+/** 레벨업 필요 경험치: 5레벨 단위로 300씩 증가 (성장 속도를 1/3로 늦춤: 예전 100씩의 3배) */
+const xpRequired = lv => (Math.floor((lv - 1) / 5) + 1) * 300;
 
 const MAX_WEAPONS = 7, MAX_BUFFS = 7;
 /** 무한 생존에서는 나오지 않는 아이템 (점수 증가는 랭킹전에서 추가 예정) */
@@ -1527,7 +1527,8 @@ class Boundary extends Skill {
   static ARCS = 8; static THICK = 6; static ARC_LEN = 60; static KB = 25 * 5 / 6;   // 넉백 ≈ 20.8px
   constructor() { super(); this.phase = 0; this.cds = new Map(); }
   get radius() { return Shield.RADII[2] * FUSION_MULT * 0.9 * this.area; }   // 범위는 10% 줄임
-  get damage() { return Orb.DMG * FUSION_MULT * this.atk; }
+  static DMG_MULT = 0.7;   // 너프: 피해 -30%
+  get damage() { return Orb.DMG * FUSION_MULT * this.atk * Boundary.DMG_MULT; }
   get tick() { return Orb.TICK / FUSION_MULT; }        // 이미 빨라서 공격 속도 증가 영향을 받지 않음
   get revTime() { return 0.5 / FUSION_MULT; }
   lines() { return [`반지름 ${this.radius.toFixed(0)}px · ${this.revTime.toFixed(2)}초에 1바퀴`, `선에 닿으면 ${n1(this.damage)} 피해 + 넉백`, '안쪽 적 이속 -1 · 적 탄 막기']; }
@@ -1546,8 +1547,9 @@ class Boundary extends Skill {
       if (this.cds.has(m)) continue;
       const a = deg(Math.atan2(dy, dx)), eps = deg(m.r / Math.max(d, m.r));
       if (cs.some(c => adiff(a, c) <= half + eps)) {
-        m.hp -= this.damage; this.cds.set(m, this.tick);
-        g.knockback(m, p.x, p.y, Boundary.KB, 0.15);
+        const res = m.bdRes || (m.tier > 0 ? 0.5 : 1);   // 탱커 1/3, 보스·중간보스 절반
+        m.hp -= this.damage * res; this.cds.set(m, this.tick);
+        g.knockback(m, p.x, p.y, Boundary.KB * (m.bdRes || 1), 0.15);
         FX.burst(m.x, m.y, '#d9c8ff', 2, 150, 0.2, 1.8);
       }
     }
@@ -1600,7 +1602,7 @@ class MegaLaser extends Skill {
 // ---- 융합: 메테오 (미사일 + 수류탄) --------------------------------------------
 class Meteor extends Skill {
   static FUSION = true;
-  static RATE = 4.0; static DURATION = 3.0; static FALL = 0.5;
+  static RATE = 4.0 * 0.8; static DURATION = 3.0 * 0.75; static FALL = 0.5;   // 빈도 4/5, 장판 지속 3/4
   constructor() { super(); this.t = 0; this.drops = []; this.patches = []; }
   get interval() { return this.cd / (Meteor.RATE * FUSION_MULT); }
   get radius() { return Math.floor(110 * FUSION_MULT * this.area); }
@@ -2171,6 +2173,7 @@ class RuneSystem {
 const MON = {
   straight: { r: 13, col: C.straight, weight: 1, tier: 0 },
   tracker: { r: 13, col: C.tracker, weight: 1, tier: 0 },
+  brute: { r: 20, col: '#e8b04a', weight: 0.35, tier: 0 },   // 탱커: 철갑 추적체 (경계선 피해·넉백 1/3)
   ranged: { r: 12, col: C.ranged, weight: 1, tier: 0 },
   drone: { r: 15, col: '#a66bff', weight: 1, tier: 0, name: '그림자 박쥐', hp: 10, spd: 125, dmg: 8, xp: 10, fly: true },
   walker: { r: 19, col: '#c9e040', weight: 1, tier: 0, name: '스크랩 워커', hp: 28, spd: 92, dmg: 12, xp: 16 },
@@ -2242,6 +2245,13 @@ function mkStraight(x, y, tx, ty, speed) {
   return m;
 }
 const mkTracker = (x, y, speed, elapsed) => newMon('tracker', x, y, trackerHp(elapsed), speed);
+/** 탱커 '철갑 추적체': 추적 몬스터의 체력 4배 · 속도 70% · 크기 1.5배 · 공격 1.5배, 경계선 피해·넉백은 1/3만 받음 */
+const BRUTE = { HP_MULT: 4, SPD_MULT: 0.7, ATK: 9, XP: 40, SCORE: 300, START: 120, INTERVAL: 7, BD_RES: 1 / 3 };
+function mkBrute(x, y, speed, elapsed) {
+  const m = newMon('brute', x, y, trackerHp(elapsed) * BRUTE.HP_MULT, speed * BRUTE.SPD_MULT);
+  m.atk = BRUTE.ATK; m.bdRes = BRUTE.BD_RES; m.rot = 0;
+  return m;
+}
 function mkRanged(x, y, speed, elapsed) {
   const m = newMon('ranged', x, y, Math.ceil(trackerHp(elapsed) * 2 / 3), speed);
   m.fireT = rand(0, RANGED.FIRE);
@@ -2269,7 +2279,7 @@ function updMon(m, dt, g) {
       m.x += m.dx * s; m.y += m.dy * s;
       break;
     }
-    case 'tracker': {
+    case 'tracker': case 'brute': {
       const dx = p.x - m.x, dy = p.y - m.y, l = Math.hypot(dx, dy) || 1, s = effSpeed(m) * dt * 60;
       m.x += dx / l * s; m.y += dy / l * s; m.rot = Math.atan2(dy, dx);
       break;
@@ -2631,6 +2641,14 @@ function monSpr(kind) {
       g.fillStyle = '#fff4dc'; g.beginPath(); g.arc(3.5, 0, 4.4, 0, TAU); g.fill();
       g.fillStyle = '#2a1200'; g.beginPath(); g.arc(5.3, 0, 2, 0, TAU); g.fill();
     });
+    case 'brute': return sprite('m_brute', 44, g => {   // 철갑 추적체: 두꺼운 팔각 장갑 + 가늘게 째진 눈
+      const oct = (r, o = Math.PI / 8) => Array.from({ length: 8 }, (_, i) => [Math.cos(i / 8 * TAU + o) * r, Math.sin(i / 8 * TAU + o) * r]);
+      poly(g, oct(21)); g.closePath(); base(g, '#2e2006', 3.4, 26);
+      poly(g, oct(14)); g.closePath(); g.strokeStyle = rgba(col, 0.75); g.lineWidth = 2; g.stroke();
+      for (const [x, y] of oct(17.5)) { g.fillStyle = col; g.beginPath(); g.arc(x, y, 1.8, 0, TAU); g.fill(); }   // 리벳
+      g.fillStyle = '#1a1000'; rr(g, 2, -3.2, 13, 6.4, 3); g.fill();                                               // 눈구멍
+      g.shadowColor = '#ffcf6a'; g.shadowBlur = 10; g.fillStyle = '#fff1c4'; rr(g, 6, -1.8, 8, 3.6, 1.8); g.fill(); g.shadowBlur = 0;
+    });
     case 'ranged': return sprite('m_ranged', 30, g => {   // 마름모 + 핵
       poly(g, [[0, -14], [12, 0], [0, 14], [-12, 0]]); g.closePath(); base(g, '#033128', 2.2);
       poly(g, [[0, -6], [5, 0], [0, 6], [-5, 0]]); g.closePath(); g.fillStyle = '#c9fff1'; g.fill();
@@ -2800,6 +2818,7 @@ function drawMons(g) {
     let rot = 0, sc = pop * m.r / MON[m.kind].r;   // 일반 몬스터는 90% 크기로 그림
     if (m.kind === 'straight') rot = m.rot;
     else if (m.kind === 'tracker') { rot = m.rot; sc *= 1 + 0.06 * Math.sin(m.age * 9 + m.x); }
+    else if (m.kind === 'brute') { rot = m.rot; sc *= 1 + 0.03 * Math.sin(m.age * 4 + m.x); }
     else if (m.kind === 'ranged') sc *= 1 + 0.05 * Math.sin(m.age * 6);
     else if (m.kind === 'mini') rot = m.age * (m.state === 'chase' ? 0.7 : 4) + 0.001;
     else if (m.kind === 'boss') rot = m.age * (m.state === 'chase' ? 0.45 : 2.2) + 0.001;
@@ -2949,6 +2968,11 @@ class Game {
   static XP_VALUE = 10; static XP_PICKUP = 60; static XP_MAGNET_SPEED = 45;
   static DROP_PICKUP = 45; static CHEST_PICKUP = 50;
   static SEP_CELL = 64; static SEP_STRENGTH = 0.5;
+  static ATK_PER_MIN = 0.15;        // 시간 강화: 1분마다 몬스터 공격력 +15% (상한 없음)
+  static SPAWN_PER_MIN = 0.12;      // 시간 강화: 1분마다 스폰율 +12% (상한 없음)
+  static CRATE_XP_CHANCE = 0.8; static CRATE_XP = 30;   // 보급 상자 80%는 '꽝' = 경험치 30
+  static HEAL_EVERY = 3;            // 증강을 3번 고를 때마다 회복
+  static HEAL_CARD_LV = 10;         // 슬롯이 다 찬 뒤 10레벨마다 회복 카드
   static MAX_MONS = 900;           // 동시에 살아 있는 몬스터 상한 (성능 보호용, 원본에는 없음)
   static MAX_ORBS = 600;           // 경험치 오브 상한 — 넘으면 기존 오브에 합쳐짐
 
@@ -2973,7 +2997,7 @@ class Game {
     this.crateTimers = [];                            // 상자 재생성 대기 시간
     this.fSpawnT = 0.2;                               // 친구 적 스폰 타이머
     this.bossHp = BOSS.HP; this.miniHp = MINI.HP; this.miniCount = 0;   // 등장할 때마다 오르는 보스류 체력
-    this.spawnT = 0; this.trackerT = 0; this.minibossT = 0;
+    this.spawnT = 0; this.trackerT = 0; this.minibossT = 0; this.bruteT = 0; this.augPicks = 0;
     this.waveT = 0; this.inWave = false; this.waveRemain = 0; this.warnT = 0; this.bossSpawned = false; this.waveCount = 0;
     this.flashT = 0; this.slowT = 0; this.hurtFlash = 0;
     this.autoAim = true;           // true=가장 가까운 적, false=마우스 방향
@@ -3093,9 +3117,12 @@ class Game {
   }
 
   // ---- 플레이어 피격 ----
+  /** 시간 강화 배율 */
+  get atkMult() { return 1 + Game.ATK_PER_MIN * this.elapsed / 60; }
+  get spawnMult() { return 1 + Game.SPAWN_PER_MIN * this.elapsed / 60; }
   hurtPlayer(dmg) {
     if (this.rescue || this.over) return;   // 구출 중에는 피해 없음
-    if (this.over) return;
+    dmg *= this.atkMult;   // 몬스터가 주는 모든 피해는 시간이 지날수록 강해짐
     const p = this.player;
     if (p.invulnT > 0 || p.runes.isInvulnerable()) return;
     if (p.runes.absorb()) {   // 보호막이 막음
@@ -3320,8 +3347,11 @@ class Game {
   onDeath(m) {
     const p = this.player, col = m.col || MON[m.kind].col, vis = this.inView(m.x, m.y, 60);
     if (m.kind === 'crate') {   // 보급 상자: 자석 35% / 붕대 37% / EMP 28%
-      const r = Math.random();
-      this.drops.push({ kind: r < 0.35 ? 'magnet' : r < 0.72 ? 'bandage' : 'emp', x: m.x, y: m.y, age: 0 });
+      if (Math.random() < Game.CRATE_XP_CHANCE) this.addOrb(m.x, m.y, Game.CRATE_XP);   // 꽝: 경험치만
+      else {   // 나머지 20%: 자석 35% / 붕대 37% / EMP 28% (전체로는 7 / 7.4 / 5.6%)
+        const r = Math.random();
+        this.drops.push({ kind: r < 0.35 ? 'magnet' : r < 0.72 ? 'bandage' : 'emp', x: m.x, y: m.y, age: 0 });
+      }
       this.crateTimers.push(Game.CRATE_RESPAWN);
       FX.burst(m.x, m.y, C.gold, 14, 260, 0.4, 2.4); FX.burst(m.x, m.y, '#ffffff', 6, 180, 0.25, 2);
       sfx('kill');
@@ -3334,6 +3364,10 @@ class Game {
         break;
       case 'straight': case 'tracker':
         this.score += Math.round(100 * p.scoreMult); this.addOrb(m.x, m.y); this.onMonsterKilled(m.x, m.y);
+        break;
+      case 'brute':
+        this.score += Math.round(BRUTE.SCORE * p.scoreMult); this.addOrb(m.x, m.y, BRUTE.XP); this.onMonsterKilled(m.x, m.y);
+        if (vis) { FX.burst(m.x, m.y, '#ffe1a0', 16, 320, 0.45, 2.6); FX.shake(0.15); }
         break;
       case 'ranged':   // 경험치 없음, 붕대만
         this.score += Math.round(RANGED.SCORE * p.scoreMult); this.onMonsterKilled(m.x, m.y, true);
@@ -3471,7 +3505,7 @@ class Game {
 
   // ---- 레벨업 ----
   static REROLLS = 1;   // 레벨업 화면 한 번에 쓸 수 있는 리롤 횟수
-  /** 증강을 고를 때마다 회복하는 양 (흡혈귀의 손톱 15, 나머지 10) */
+  /** 증강을 3번 고를 때마다 회복하는 양 (흡혈귀의 손톱 15, 나머지 10) */
   pickHeal() { return this.player.ci === 2 ? 15 : 10; }
   /** '체력 회복' 증강 카드의 회복량 (흡혈귀의 손톱 20, 나머지 15) */
   healCardAmount() { return this.player.ci === 2 ? 20 : 15; }
@@ -3487,7 +3521,7 @@ class Game {
   }
   /**
    * 스킬+버프를 하나의 풀에서 섞어 최대 3개.
-   * 슬롯이 모두 찬 뒤에는 5레벨마다 '체력 회복' 카드가 한 장 끼어든다.
+   * 슬롯이 모두 찬 뒤에는 10레벨마다 '체력 회복' 카드가 한 장 끼어든다.
    * avoid: 리롤할 때 방금 나온 아이템은 가능하면 피한다
    */
   buildOffers(lv, avoid = []) {
@@ -3498,7 +3532,7 @@ class Game {
     }
     shuffle(pool);
     const fresh = pool.filter(o => !avoid.includes(o[0])), used = pool.filter(o => avoid.includes(o[0]));
-    const healCard = this.slotsFull() && lv % 5 === 0;
+    const healCard = this.slotsFull() && lv % Game.HEAL_CARD_LV === 0;
     return fresh.concat(used).slice(0, healCard ? 2 : 3).concat(healCard ? [['heal', 0]] : []);
   }
   /** 리롤: 남은 횟수가 있고 다른 아이템이 나올 수 있을 때만 */
@@ -3523,7 +3557,7 @@ class Game {
     if (lu.kind === 'fusion') { p.applyFusion(id); this.banner(`융합: ${itemName(id)}`, C.fusion); }
     else if (id === 'heal') this.heal(this.healCardAmount(), C.bandage);   // 체력 회복 카드 (고를 때 회복은 따로 없음)
     else p.apply(id);
-    if (lu.kind === 'levelup' && id !== 'heal') this.heal(this.pickHeal(), C.bandage);   // 증강을 고를 때마다 회복
+    if (lu.kind === 'levelup' && id !== 'heal' && ++this.augPicks % Game.HEAL_EVERY === 0) this.heal(this.pickHeal(), C.bandage);   // 증강 3번째마다 회복
     this.levelup = null;
     FX.ring(p.x, p.y, 10, 120, 0.4, ITEM_COLORS[id], 4); FX.burst(p.x, p.y, ITEM_COLORS[id], 20, 300, 0.45, 2.4);
     sfx('pickup');
@@ -3665,16 +3699,27 @@ class Game {
 
     // ── 일반 몬스터 스폰 ──
     this.spawnT += dt;
-    if (this.spawnT >= Game.SPAWN_INTERVAL) { this.spawnT = 0; this.spawnGroups('straight'); }
+    const sm = this.spawnMult;   // 시간이 지날수록 더 자주
+    if (this.spawnT >= Game.SPAWN_INTERVAL / sm) { this.spawnT = 0; this.spawnGroups('straight'); }
     this.trackerT += dt;
-    if (this.trackerT >= Game.TRACKER_INTERVAL) { this.trackerT = 0; this.spawnGroups('tracker'); }
+    if (this.trackerT >= Game.TRACKER_INTERVAL / sm) { this.trackerT = 0; this.spawnGroups('tracker'); }
+    if (this.elapsed >= BRUTE.START) {   // 탱커 '철갑 추적체': 2분부터 (웨이브 중에는 2마리)
+      this.bruteT += dt;
+      if (this.bruteT >= BRUTE.INTERVAL / sm && this.mons.length < Game.MAX_MONS) {
+        this.bruteT = 0;
+        for (let k = 0; k < (this.inWave ? 2 : 1); k++) {
+          const pt = this.pickSpawnPoint();
+          if (pt) this.mons.push(mkBrute(Arena.cx(pt[0], 20), Arena.cy(pt[1], 20), this.trackerSpeed(), this.elapsed));
+        }
+      }
+    }
     // 친구 게임 적: 친구 게임 규칙 그대로 (최대 수와 간격이 시간에 따라 늘어남, 친구 적만 따로 셈)
-    const mins = this.elapsed / 60, fCap = Math.min(130, 26 + Math.floor(mins * 28));
+    const mins = this.elapsed / 60, fCap = Math.round(Math.min(130, 26 + Math.floor(mins * 28)) * sm);
     this.fSpawnT -= dt;
     if (this.fSpawnT <= 0) {
       let fCount = 0; for (const m of this.mons) if (m.xp) fCount++;
       if (fCount < fCap && this.mons.length < Game.MAX_MONS) {
-        this.fSpawnT = Math.max(0.16, 0.72 - mins * 0.14);
+        this.fSpawnT = Math.max(0.16, 0.72 - mins * 0.14) / sm;
         const pack = mins > 1.5 ? 3 : mins > 0.6 ? 2 : 1;
         for (let k = 0; k < pack; k++) this.spawnFriend();
       } else this.fSpawnT = 0.1;
@@ -4355,6 +4400,7 @@ function drawHUD(g) {
     bar(ctx, VW / 2 - 110, 56, 220, 8, g.waveRemain / Game.WAVE_DURATION, '#ff4d6a', 'rgba(70,16,26,0.85)');
     txt(ctx, `웨이브 ${g.waveCount}  ·  ${Math.ceil(g.waveRemain)}초`, VW / 2, 76, 13, '#ff8a9a', 'center', 700);
   } else txt(ctx, `다음 웨이브까지 ${Math.ceil(Math.max(0, Game.WAVE_CYCLE - g.waveT))}초`, VW / 2, 60, 12, C.dim, 'center', 600);
+  if (g.elapsed >= 30) txt(ctx, `위협  공격 ×${g.atkMult.toFixed(2)}  ·  출현 ×${g.spawnMult.toFixed(2)}`, VW / 2, 78, 11, rgba('#ff8a9a', 0.75), 'center', 700);   // 시간 강화
 
   // 보스 체력바
   const bosses = g.rescue ? [] : g.bosses();   // 구출 연출 중에는 숨김
@@ -4778,7 +4824,7 @@ function drawLevelUp(g) {
     const action = isHeal ? '즉시 사용' : wk === 'fusion' ? '신규 (재료 소멸)' : cur === 0 ? '신규' : `Lv ${cur}  →  Lv ${cur + 1}`;
     txt(ctx, action, x + W / 2, y + 198, 14, cur === 0 ? '#9df0c0' : C.gold, 'center', 700);
     ctx.fillStyle = 'rgba(120,150,220,0.22)'; ctx.fillRect(x + 28, y + 218, W - 56, 1);
-    const desc = isHeal ? [`HP ${g.healCardAmount()} 회복`, `현재 HP ${Math.ceil(p.hp)} / ${p.maxHp}`, '슬롯이 모두 찬 뒤 5레벨마다 등장'] : itemDesc(id, cur, p);
+    const desc = isHeal ? [`HP ${g.healCardAmount()} 회복`, `현재 HP ${Math.ceil(p.hp)} / ${p.maxHp}`, '슬롯이 모두 찬 뒤 10레벨마다 등장'] : itemDesc(id, cur, p);
     desc.slice(0, 3).forEach((ln, j) => txt(ctx, ln, x + W / 2, y + 244 + j * 25, 15, '#d0d9ec', 'center', 600));
     txt(ctx, `[ ${i + 1} ]`, x + 20, y + 28, 13, hov ? '#fff' : C.dim, 'left', 800);
     if (wk === 'weapon') {   // 카드 하단: 이 무기와 융합 조합이 있는 무기 (보유 중이면 밝게)
@@ -4800,7 +4846,8 @@ function drawLevelUp(g) {
   });
   if (fusion) { txt(ctx, '재료 무기 두 개가 사라지고 무기 칸 하나만 차지해요 (재료 무기는 다시 얻을 수 있어요)', VW / 2, y0 + H + 34, 14, C.gray, 'center', 600); return; }
   // 카드 아래: 고를 때 회복 안내 + 리롤 버튼
-  txt(ctx, `증강을 고르면 HP ${g.pickHeal()} 회복` + (lu.offers.some(o => o[0] === 'heal') ? '  (체력 회복 카드는 제외)' : ''), VW / 2, y0 + H + 22, 13, '#7fe6a6', 'center', 600);
+  const left = Game.HEAL_EVERY - (g.augPicks % Game.HEAL_EVERY);   // 증강 3번째마다 회복
+  txt(ctx, (left === 1 ? `이번 증강을 고르면 HP ${g.pickHeal()} 회복!` : `증강 ${left}번 더 고르면 HP ${g.pickHeal()} 회복`) + (lu.offers.some(o => o[0] === 'heal') ? '  (체력 회복 카드는 세지 않음)' : ''), VW / 2, y0 + H + 22, 13, left === 1 ? '#7fe6a6' : '#6fa88a', 'center', 600);
   const bw = 230, bh = 44, bx = VW / 2 - bw / 2, by = y0 + H + 44, ok = g.canReroll();
   if (ok && lu.t >= 0.25) button(bx, by, bw, bh, `리롤  (${lu.rerolls}회 남음)`, () => g.reroll(), { col: '#5fe1ff', size: 16 });
   else {
