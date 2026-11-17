@@ -2,11 +2,19 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>몬스터 헌팅: 에덴</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #03050b; overflow: hidden; }
-  canvas { position: absolute; left: 0; top: 0; display: block; cursor: crosshair; }
+  html, body { margin: 0; height: 100%; background: #03050b; overflow: hidden; overscroll-behavior: none; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  canvas { position: absolute; left: 0; top: 0; display: block; cursor: crosshair; touch-action: none; }
+  #rot { position: fixed; inset: 0; display: none; z-index: 5; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    background: #03050b; color: #eaffff; font: 700 20px "Pretendard","Apple SD Gothic Neo","Noto Sans KR",sans-serif; text-align: center; }
+  #rot .ph { width: 54px; height: 92px; border: 3px solid #5fe1ff; border-radius: 10px; box-shadow: 0 0 18px #5fe1ff; animation: rt 1.6s ease-in-out infinite; }
+  #rot small { color: #8f9bb8; font-size: 14px; font-weight: 600; }
+  @keyframes rt { 0%, 30% { transform: rotate(0deg); } 60%, 100% { transform: rotate(-90deg); } }
   #nm {
     position: absolute; display: none; box-sizing: border-box; margin: 0; padding: 0 12px;
     background: transparent; border: none; outline: none; color: #fff; text-align: center;
@@ -17,6 +25,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="rot"><div class="ph"></div>화면을 가로로 돌려 주세요<small>몬스터 헌팅: 에덴은 가로 화면에서 플레이해요</small></div>
 <input id="nm" maxlength="10" placeholder="생존자 이름" autocomplete="off" spellcheck="false">
 <script>
 'use strict';
@@ -26,7 +35,9 @@
 // =============================================================================
 
 // ---- 기본 상수 ---------------------------------------------------------------
-const VW = 1280, VH = 720;          // 논리 화면 크기 (창 크기에 맞춰 비율 유지 확대)
+let VW = 1280, VH = 720;            // 논리 화면 크기 (창 크기에 맞춰 비율 유지 확대) — HUD를 키울 때만 잠깐 바뀜 (withUi)
+const BASE_W = 1280, BASE_H = 720;
+let UI_K = 1;                        // 지금 그리는 UI의 확대 배율 (모바일 HUD)
 const MAP_W = 5000, MAP_H = 5000;   // 월드 크기
 const TAU = Math.PI * 2;
 const FONT = '"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR","Noto Sans CJK KR","Segoe UI",sans-serif';
@@ -72,7 +83,7 @@ function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 // flash : 화면 번쩍임 (광과민성 배려)   shake : 화면 흔들림 + 히트스톱
 // sound : 효과음                      bloom : 빛 번짐 (끄면 가벼워짐)
 // fxAlpha : 내 공격 효과의 진하기 (낮출수록 투명해져서 적 탄이 잘 보임)
-const SET = Object.assign({ flash: true, shake: true, sound: true, bloom: true, fxAlpha: 0.6 }, loadJSON('mh_settings', {}));
+const SET = Object.assign({ flash: true, shake: true, sound: true, bloom: true, fxAlpha: 0.6, mobile: false, btnScale: 1, btnAlpha: 0.6 }, loadJSON('mh_settings', {}));
 const FX_ALPHAS = [1, 0.8, 0.6, 0.4];
 const saveSettings = () => saveJSON('mh_settings', SET);
 
@@ -102,18 +113,32 @@ let RS = 1;                 // 렌더 배율 (논리 좌표 → 캔버스 픽셀
 let CSS_S = 1, OFF_X = 0, OFF_Y = 0;
 const B1 = document.createElement('canvas'), B2 = document.createElement('canvas');
 const FXL = document.createElement('canvas'), FXL_CTX = FXL.getContext('2d');   // 내 공격 효과 전용 층
+let _lastW = 0, _lastH = 0;
+/** 창 크기가 바뀌었으면 다시 맞춤 — iOS는 화면을 돌린 직후 크기가 늦게 바뀌어서 매 프레임 확인 */
+function checkResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  if (w !== _lastW || h !== _lastH) resize();
+}
 function resize() {
-  const w = window.innerWidth || VW, h = window.innerHeight || VH;
-  CSS_S = Math.min(w / VW, h / VH);
+  const w = window.innerWidth || BASE_W, h = window.innerHeight || BASE_H;
+  _lastW = window.innerWidth; _lastH = window.innerHeight;
+  CSS_S = Math.min(w / BASE_W, h / BASE_H);
   RS = clamp(CSS_S * (window.devicePixelRatio || 1), 0.5, 1.5);   // 너무 큰 해상도는 1.5배로 제한
-  cv.width = Math.round(VW * RS); cv.height = Math.round(VH * RS);
-  cv.style.width = VW * CSS_S + 'px'; cv.style.height = VH * CSS_S + 'px';
-  OFF_X = (w - VW * CSS_S) / 2; OFF_Y = (h - VH * CSS_S) / 2;
+  cv.width = Math.round(BASE_W * RS); cv.height = Math.round(BASE_H * RS);
+  cv.style.width = BASE_W * CSS_S + 'px'; cv.style.height = BASE_H * CSS_S + 'px';
+  OFF_X = (w - BASE_W * CSS_S) / 2; OFF_Y = (h - BASE_H * CSS_S) / 2;
   cv.style.left = OFF_X + 'px'; cv.style.top = OFF_Y + 'px';
   FXL.width = cv.width; FXL.height = cv.height;
   B1.width = Math.max(1, cv.width >> 2); B1.height = Math.max(1, cv.height >> 2);
   B2.width = Math.max(1, cv.width >> 3); B2.height = Math.max(1, cv.height >> 3);
   if (typeof App !== 'undefined' && App.placeNameInput) App.placeNameInput();
+  // 폰을 세로로 들고 있으면 '가로로 돌려 주세요' 안내 (게임은 자동 일시정지)
+  //   폰(짧은 변 600px 미만)에서만 — 태블릿(아이패드)은 세로여도 그대로 플레이 가능
+  const rot = document.getElementById('rot'), coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+  const phone = Math.min(screen.width || w, screen.height || h) < 600;
+  const portrait = (SET.mobile || coarse) && phone && h > w * 1.05;
+  if (rot) rot.style.display = portrait ? 'flex' : 'none';
+  if (portrait && typeof App !== 'undefined' && App.game && App.scene === 'game' && !App.game.over) App.game.paused = true;
 }
 /**
  * 내 공격 효과를 별도 층에 그린 뒤 설정한 진하기(투명도)로 화면에 더한다.
@@ -159,6 +184,7 @@ function bloomPass() {
 // ---- 그리기 헬퍼 -------------------------------------------------------------
 const _fontCache = new Map();
 function font(size, weight = 600) {
+  if (SET.mobile && size < 16) size += (16 - size) * 0.45;   // 모바일: 작은 글자를 조금 키움
   const k = size * 1000 + weight;
   let f = _fontCache.get(k);
   if (!f) { f = `${weight} ${size}px ${FONT}`; _fontCache.set(k, f); }
@@ -440,6 +466,72 @@ const MOUSE = { x: VW / 2, y: VH / 2 };
 function toLogical(e) {
   MOUSE.x = (e.clientX - OFF_X) / CSS_S;
   MOUSE.y = (e.clientY - OFF_Y) / CSS_S;
+}
+
+// =============================================================================
+// 조작 설정 — PC 키 바꾸기 / 모바일 조작 (가상 조이스틱)
+// =============================================================================
+// [행동 이름, 설정 창에 보이는 이름, 기본 키]
+const KEY_ACTIONS = [
+  ['up', '위로 이동', 'KeyW'], ['down', '아래로 이동', 'KeyS'], ['left', '왼쪽으로 이동', 'KeyA'], ['right', '오른쪽으로 이동', 'KeyD'],
+  ['rune1', '룬석 1  ·  카드 1', 'Digit1'], ['rune2', '룬석 2  ·  카드 2', 'Digit2'], ['rune3', '룬석 3  ·  카드 3', 'Digit3'],
+  ['rune4', '룬석 4', 'Digit4'], ['rune5', '룬석 5', 'Digit5'],
+  ['use', '룬석 사용 (우클릭도 가능)', 'Space'], ['aim', '자동 / 수동 조준 전환', 'KeyT'], ['reroll', '증강 리롤', 'KeyR'],
+  ['pause', '일시정지 (ESC도 가능)', 'Escape'], ['mute', '효과음 켜기 / 끄기', 'KeyM'],
+];
+const KEY_DEFAULT = Object.fromEntries(KEY_ACTIONS.map(([a, , k]) => [a, k]));
+const KEY_ALT = { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], pause: ['Escape'] };   // 항상 같이 되는 키
+const KEYMAP = Object.assign({}, KEY_DEFAULT, loadJSON('mh_keys', {}));
+const saveKeys = () => saveJSON('mh_keys', KEYMAP);
+const RUNE_KEYS = ['rune1', 'rune2', 'rune3', 'rune4', 'rune5'];
+
+/** code가 그 행동의 키인지 (보조 키는 다른 행동에 쓰이지 않을 때만) */
+function isKey(code, a) {
+  if (KEYMAP[a] === code) return true;
+  const alt = KEY_ALT[a];
+  return !!alt && alt.includes(code) && !KEY_ACTIONS.some(([b]) => b !== a && KEYMAP[b] === code);
+}
+const keyHeld = a => KEYS.has(KEYMAP[a]) || (KEY_ALT[a] || []).some(c => KEYS.has(c) && !KEY_ACTIONS.some(([b]) => b !== a && KEYMAP[b] === c));
+/** 겹치는 키는 서로 맞바꿈 */
+function bindKey(a, code) {
+  const prev = KEYMAP[a];
+  for (const [b] of KEY_ACTIONS) if (b !== a && KEYMAP[b] === code) KEYMAP[b] = prev;
+  KEYMAP[a] = code; saveKeys();
+}
+function resetKeys() { Object.assign(KEYMAP, KEY_DEFAULT); saveKeys(); }
+const KEY_NAMES = { Space: 'Space', Escape: 'ESC', Enter: 'Enter', Tab: 'Tab', Backspace: '←Back', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+  ShiftLeft: 'L-Shift', ShiftRight: 'R-Shift', ControlLeft: 'L-Ctrl', ControlRight: 'R-Ctrl', AltLeft: 'L-Alt', AltRight: 'R-Alt', CapsLock: 'Caps',
+  Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/' };
+function keyName(code) {
+  if (!code) return '-';
+  if (KEY_NAMES[code]) return KEY_NAMES[code];
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return 'Num' + code.slice(6);
+  return code;
+}
+const kn = a => keyName(KEYMAP[a]);
+
+// ---- 모바일: 화면 아무 곳이나 누르면 그 자리에 생기는 조이스틱 ----------------------
+const JOY = { id: null, ox: 0, oy: 0, x: 0, y: 0, vx: 0, vy: 0, mag: 0 };
+const joyR = () => 78 * SET.btnScale;   // 조이스틱 반지름 (논리 화면 px)
+const JOY_DEAD = 0.18;                  // 이만큼은 움직여야 이동
+function joyStart(id, x, y) { Object.assign(JOY, { id, ox: x, oy: y, x, y, vx: 0, vy: 0, mag: 0 }); }
+function joyMove(x, y) {
+  const R = joyR();
+  let dx = x - JOY.ox, dy = y - JOY.oy, d = Math.hypot(dx, dy);
+  if (d > R) {   // 손가락이 멀리 가면 조이스틱 중심이 따라옴
+    JOY.ox = x - dx / d * R; JOY.oy = y - dy / d * R;
+    dx = x - JOY.ox; dy = y - JOY.oy; d = R;
+  }
+  JOY.x = x; JOY.y = y; JOY.mag = d / R;
+  JOY.vx = d > 0 ? dx / d : 0; JOY.vy = d > 0 ? dy / d : 0;
+}
+function joyEnd() { JOY.id = null; JOY.vx = JOY.vy = JOY.mag = 0; }
+/** 조이스틱 입력: [x, y, 세기 0~1] (데드존 밖에서만) */
+function joyVec() {
+  if (JOY.id === null || JOY.mag < JOY_DEAD) return null;
+  return [JOY.vx, JOY.vy, clamp((JOY.mag - JOY_DEAD) / 0.42, 0, 1)];
 }
 
 // =============================================================================
@@ -2813,13 +2905,15 @@ class Player {
     this.recalc();
   }
   move(dt) {
-    let dx = 0, dy = 0;
-    if (KEYS.has('KeyA') || KEYS.has('ArrowLeft')) dx -= 1;
-    if (KEYS.has('KeyD') || KEYS.has('ArrowRight')) dx += 1;
-    if (KEYS.has('KeyW') || KEYS.has('ArrowUp')) dy -= 1;
-    if (KEYS.has('KeyS') || KEYS.has('ArrowDown')) dy += 1;
+    let dx = 0, dy = 0, k = 1;
+    if (keyHeld('left')) dx -= 1;
+    if (keyHeld('right')) dx += 1;
+    if (keyHeld('up')) dy -= 1;
+    if (keyHeld('down')) dy += 1;
     if (dx || dy) { const l = Math.hypot(dx, dy); dx /= l; dy /= l; }
-    const s = this.spd * (1 + this.buffLv('move_up') * 0.14) * this.runeSpd * dt * 60;
+    else if (SET.mobile) { const j = joyVec(); if (j) { dx = j[0]; dy = j[1]; k = 0.35 + 0.65 * j[2]; } }   // 모바일 조이스틱 (살짝 밀면 천천히)
+    if (dx || dy) this.moveAng = Math.atan2(dy, dx);   // 모바일 수동 조준: 마지막으로 움직인 방향
+    const s = k * this.spd * (1 + this.buffLv('move_up') * 0.14) * this.runeSpd * dt * 60;
     this.x = Arena.cx(this.x + dx * s, this.r);
     this.y = Arena.cy(this.y + dy * s, this.r);
     this.moving = !!(dx || dy);
@@ -3463,23 +3557,27 @@ class Game {
   // ---- 입력 ----
   onKey(code) {
     // ESC: 기본 무기 선택 / 증강 선택 / 룬석 뒤집기 중에도 일시정지 (그 화면은 계속하기를 누르면 그대로 돌아옴)
-    if (!this.over && (code === 'Escape' || code === 'KeyP')) { this.paused = !this.paused; sfx('click'); return; }
+    if (!this.over && isKey(code, 'pause')) { this.paused = !this.paused; sfx('click'); return; }
     if (this.paused) { if (code === 'Tab') { this.pauseTab ^= 1; sfx('click'); } return; }
-    if (this.runeReveal) { if (code === 'Space' || code === 'Enter') this.revealSkipOrClose(); return; }
-    if (this.weaponSel) { const i = ['Digit1', 'Digit2', 'Digit3'].indexOf(code); if (i >= 0) this.pickBasic(i); return; }
-    if (this.levelup) { const i = ['Digit1', 'Digit2', 'Digit3'].indexOf(code); if (i >= 0) this.choose(i); else if (code === 'KeyR') this.reroll(); return; }
-    if (this.over) return;
-    if (code === 'Escape' || code === 'KeyP') { this.paused = !this.paused; sfx('click'); return; }
-    if (this.paused) { if (code === 'Tab') { this.pauseTab ^= 1; sfx('click'); } return; }
-    if (this.rescue) return;
-    if (code === 'KeyT') this.autoAim = !this.autoAim;
-    const d = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(code);
+    const card = RUNE_KEYS.slice(0, 3).findIndex(a => isKey(code, a));   // 카드 고르기: 룬석 1~3 키
+    if (this.runeReveal) { if (isKey(code, 'use') || code === 'Enter') this.revealSkipOrClose(); return; }
+    if (this.weaponSel) { if (card >= 0) this.pickBasic(card); return; }
+    if (this.levelup) { if (card >= 0) this.choose(card); else if (isKey(code, 'reroll')) this.reroll(); return; }
+    if (this.over || this.rescue) return;
+    if (isKey(code, 'aim')) this.autoAim = !this.autoAim;
+    const d = RUNE_KEYS.findIndex(a => isKey(code, a));
     if (d >= 0) this.player.runes.select(d);
-    if (code === 'Space') this.player.runes.useSelected(this);
+    if (isKey(code, 'use')) this.player.runes.useSelected(this);
   }
   onRightClick() {
     if (this.runeReveal || this.weaponSel || this.levelup || this.over || this.paused || this.rescue) return;
     this.player.runes.useSelected(this);
+  }
+  /** 모바일: 룬석 슬롯을 누르면 고르면서 바로 사용 */
+  tapRune(i) {
+    const rs = this.player.runes;
+    rs.select(i);
+    if (rs.slots[i]) this.onRightClick();
   }
 
   // ===========================================================================
@@ -3630,7 +3728,8 @@ class Game {
       if (t) p.face = deg(Math.atan2(t.y - p.y, t.x - p.x));
     } else {
       p.hasTarget = true;
-      p.face = deg(Math.atan2(MOUSE.y + c.y - p.y, MOUSE.x + c.x - p.x));
+      if (SET.mobile) { if (p.moveAng !== undefined) p.face = deg(p.moveAng); }   // 모바일: 이동 방향으로 조준, 멈추면 마지막 방향 유지
+      else p.face = deg(Math.atan2(MOUSE.y + c.y - p.y, MOUSE.x + c.x - p.x));
     }
     // 광폭화 룬석: 이번 프레임에 무기가 준 피해를 배율만큼 증폭
     const mult = runes.damageMult();
@@ -4134,8 +4233,17 @@ function drawScreenFx(g) {
 // 버튼은 그릴 때마다 클릭 영역을 등록하고, 클릭 이벤트에서 그 목록을 검사한다.
 // =============================================================================
 const UI = { hot: [] };
-const inRect = (x, y, w, h) => MOUSE.x >= x && MOUSE.x <= x + w && MOUSE.y >= y && MOUSE.y <= y + h;
-function hot(x, y, w, h, fn) { UI.hot.push({ x, y, w, h, fn }); return inRect(x, y, w, h); }
+const inRect = (x, y, w, h) => { const k = UI_K; return MOUSE.x >= x * k && MOUSE.x <= (x + w) * k && MOUSE.y >= y * k && MOUSE.y <= (y + h) * k; };
+/** 누를 수 있는 영역 등록 (확대된 HUD 안에서도 실제 화면 좌표로 저장) */
+function hot(x, y, w, h, fn) { const k = UI_K; UI.hot.push({ x: x * k, y: y * k, w: w * k, h: h * k, fn }); return inRect(x, y, w, h); }
+/** k배로 키워서 그리기: 그 안에서는 VW·VH가 화면을 k배 확대한 크기로 보임 */
+function withUi(k, fn) {
+  if (k === 1) { fn(); return; }
+  const w = VW, h = VH;
+  VW = w / k; VH = h / k; UI_K = k;
+  ctx.save(); ctx.scale(k, k);
+  try { fn(); } finally { ctx.restore(); VW = w; VH = h; UI_K = 1; }
+}
 function button(x, y, w, h, label, fn, o = {}) {
   const col = o.col || '#6fa8ff', hov = hot(x, y, w, h, fn);
   rr(ctx, x, y, w, h, o.r || 10);
@@ -4148,10 +4256,10 @@ function button(x, y, w, h, label, fn, o = {}) {
 }
 /** 켜짐/꺼짐 스위치 한 줄 */
 function toggleRow(x, y, w, label, on, fn) {
-  const hov = hot(x, y, w, 28, fn);
-  rr(ctx, x, y, w, 28, 8); ctx.fillStyle = hov ? 'rgba(90,140,255,0.16)' : 'rgba(255,255,255,0.04)'; ctx.fill();
-  txt(ctx, label, x + 12, y + 15, 14, hov ? '#fff' : '#c6d2ee', 'left', 600);
-  const sx = x + w - 52, sy = y + 5;
+  const hov = hot(x, y, w, 26, fn);
+  rr(ctx, x, y, w, 26, 8); ctx.fillStyle = hov ? 'rgba(90,140,255,0.16)' : 'rgba(255,255,255,0.04)'; ctx.fill();
+  txt(ctx, label, x + 12, y + 14, 14, hov ? '#fff' : '#c6d2ee', 'left', 600);
+  const sx = x + w - 52, sy = y + 4;
   rr(ctx, sx, sy, 40, 18, 9); ctx.fillStyle = on ? '#2fd07a' : '#3a4460'; ctx.fill();
   ctx.beginPath(); ctx.arc(on ? sx + 31 : sx + 9, sy + 9, 7, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
 }
@@ -4159,19 +4267,39 @@ function settingRows(x, y, w, withFullscreen) {
   const rows = [
     ['화면 번쩍임', 'flash'], ['화면 흔들림 · 히트스톱', 'shake'], ['효과음', 'sound'], ['빛 번짐 (끄면 가벼워져요)', 'bloom'],
   ];
-  const S = 31;
+  const S = 28;
   rows.forEach(([label, key], i) => toggleRow(x, y + i * S, w, label, SET[key], () => { SET[key] = !SET[key]; saveSettings(); }));
   // 내 공격 효과 진하기: 누를 때마다 100 → 80 → 60 → 40%
-  const fy = y + rows.length * S, hov = hot(x, fy, w, 28, () => { SET.fxAlpha = FX_ALPHAS[(FX_ALPHAS.indexOf(SET.fxAlpha) + 1) % FX_ALPHAS.length]; saveSettings(); });
-  rr(ctx, x, fy, w, 28, 8); ctx.fillStyle = hov ? 'rgba(90,140,255,0.16)' : 'rgba(255,255,255,0.04)'; ctx.fill();
-  txt(ctx, '내 공격 효과 진하기', x + 12, fy + 15, 14, hov ? '#fff' : '#c6d2ee', 'left', 600);
-  txt(ctx, Math.round(SET.fxAlpha * 100) + '%', x + w - 14, fy + 15, 14, '#5fe1ff', 'right', 800);
+  const fy = y + rows.length * S, hov = hot(x, fy, w, 26, () => { SET.fxAlpha = FX_ALPHAS[(FX_ALPHAS.indexOf(SET.fxAlpha) + 1) % FX_ALPHAS.length]; saveSettings(); });
+  rr(ctx, x, fy, w, 26, 8); ctx.fillStyle = hov ? 'rgba(90,140,255,0.16)' : 'rgba(255,255,255,0.04)'; ctx.fill();
+  txt(ctx, '내 공격 효과 진하기', x + 12, fy + 14, 14, hov ? '#fff' : '#c6d2ee', 'left', 600);
+  txt(ctx, Math.round(SET.fxAlpha * 100) + '%', x + w - 14, fy + 14, 14, '#5fe1ff', 'right', 800);
   if (withFullscreen) toggleRow(x, fy + S, w, '전체 화면', !!document.fullscreenElement, toggleFullscreen);
+  // 마지막 줄: [조작: PC / 모바일] [키 설정]
+  const ly = fy + S * 2, hw = (w - 8) / 2;
+  const h1 = hot(x, ly, hw, 26, () => setMobile(!SET.mobile));
+  rr(ctx, x, ly, hw, 26, 8); ctx.fillStyle = h1 ? 'rgba(90,140,255,0.2)' : SET.mobile ? 'rgba(255,154,46,0.14)' : 'rgba(255,255,255,0.04)'; ctx.fill();
+  if (SET.mobile) { ctx.strokeStyle = 'rgba(255,154,46,0.6)'; ctx.lineWidth = 1.2; ctx.stroke(); }
+  txt(ctx, '조작', x + 12, ly + 14, 14, '#c6d2ee', 'left', 600);
+  txt(ctx, SET.mobile ? '모바일' : 'PC', x + hw - 12, ly + 14, 14, SET.mobile ? '#ff9a2e' : '#5fe1ff', 'right', 800);
+  const h2 = hot(x + hw + 8, ly, hw, 26, () => KeyEdit.show());
+  rr(ctx, x + hw + 8, ly, hw, 26, 8); ctx.fillStyle = h2 ? 'rgba(90,140,255,0.2)' : 'rgba(255,255,255,0.04)'; ctx.fill();
+  txt(ctx, '키 · 버튼 설정', x + hw + 8 + hw / 2, ly + 14, 14, h2 ? '#fff' : '#c6d2ee', 'center', 700);
+}
+/** 조작 방식 바꾸기 — 모바일을 처음 켤 때는 가벼운 그래픽(빛 번짐 끔)으로 */
+function setMobile(on) {
+  SET.mobile = on;
+  if (on && !SET.mobileInit) { SET.mobileInit = true; SET.bloom = false; }
+  joyEnd(); _fontCache.clear(); saveSettings();
 }
 function toggleFullscreen() {
   try {
     if (document.fullscreenElement) document.exitFullscreen();
-    else { const r = document.documentElement.requestFullscreen(); if (r && r.catch) r.catch(() => { }); }
+    else {
+      const r = document.documentElement.requestFullscreen();
+      const lock = () => { try { const p = screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'); if (p && p.catch) p.catch(() => { }); } catch (e) { /* 방향 고정 불가 */ } };
+      if (r && r.then) r.then(lock, () => { }); else lock();   // 폰: 전체 화면이 되면 가로로 고정 시도
+    }
   } catch (e) { /* 전체 화면이 막힌 환경 */ }
 }
 function dim(a) { ctx.fillStyle = `rgba(3,5,12,${a})`; ctx.fillRect(0, 0, VW, VH); }
@@ -4250,19 +4378,41 @@ function drawHUD(g) {
   drawBanners(g, bosses.length ? 150 : 118);
   if (!g.levelup && !g.runeReveal && !g.weaponSel && !g.paused && !g.over && !g.rescue) drawHuntCard(g);   // 다른 창이 열려 있으면 숨김
   drawWaveWarning(g);
-  drawOffscreenArrows(g);
   drawMinimap(g);
   drawRuneSlots(g);
 
-  // 자동/수동 조준 스위치 [T]
-  const ax = 170, ay = VH - 46;
-  const hov = hot(ax, ay, 160, 30, () => { g.autoAim = !g.autoAim; });
-  rr(ctx, ax, ay, 160, 30, 8); ctx.fillStyle = hov ? 'rgba(40,60,110,0.85)' : 'rgba(8,12,26,0.8)'; ctx.fill();
+  // 자동/수동 조준 스위치 [조준 키] — 모바일은 크게
+  const mob = SET.mobile, aw = mob ? 176 : 160, ah = mob ? 40 : 30, ax = 170, ay = VH - 16 - ah;
+  const hov = hot(ax, ay, aw, ah, () => { g.autoAim = !g.autoAim; });
+  rr(ctx, ax, ay, aw, ah, 8); ctx.fillStyle = hov && !mob ? 'rgba(40,60,110,0.85)' : 'rgba(8,12,26,0.8)'; ctx.fill();
   ctx.strokeStyle = g.autoAim ? '#2fd07a' : 'rgba(120,150,220,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
-  rr(ctx, ax + 8, ay + 7, 34, 16, 8); ctx.fillStyle = g.autoAim ? '#2fd07a' : '#3a4460'; ctx.fill();
-  ctx.beginPath(); ctx.arc(g.autoAim ? ax + 34 : ax + 16, ay + 15, 6, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
-  txt(ctx, g.autoAim ? '자동 조준' : '수동 조준', ax + 50, ay + 16, 13, g.autoAim ? '#9df0c0' : C.gray, 'left', 700);
-  txt(ctx, 'T', ax + 148, ay + 16, 12, C.dim, 'right', 700);
+  const sy = ay + ah / 2;
+  rr(ctx, ax + 8, sy - 8, 34, 16, 8); ctx.fillStyle = g.autoAim ? '#2fd07a' : '#3a4460'; ctx.fill();
+  ctx.beginPath(); ctx.arc(g.autoAim ? ax + 34 : ax + 16, sy, 6, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
+  txt(ctx, g.autoAim ? '자동 조준' : (mob ? '이동 방향 조준' : '수동 조준'), ax + 50, sy + 1, 13, g.autoAim ? '#9df0c0' : C.gray, 'left', 700);
+  if (!mob) txt(ctx, kn('aim'), ax + aw - 12, sy + 1, 12, C.dim, 'right', 700);
+
+  // 모바일: 일시정지 버튼 (위쪽 가운데 시간 옆)
+  if (mob && !g.over && !g.rescue) {
+    const s = 50 * SET.btnScale, px = VW / 2 + 96, py = 12;
+    hot(px, py, s, s, () => { g.paused = true; joyEnd(); });
+    ctx.globalAlpha = Math.max(0.5, SET.btnAlpha);
+    rr(ctx, px, py, s, s, 12); ctx.fillStyle = 'rgba(8,12,26,0.85)'; ctx.fill(); ctx.strokeStyle = 'rgba(150,180,240,0.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#eaf2ff'; ctx.fillRect(px + s * 0.34, py + s * 0.28, s * 0.11, s * 0.44); ctx.fillRect(px + s * 0.55, py + s * 0.28, s * 0.11, s * 0.44);
+    ctx.globalAlpha = 1;
+  }
+}
+/** 모바일 조이스틱 (화면 좌표 그대로) */
+function drawJoystick() {
+  if (!SET.mobile || JOY.id === null) return;
+  const R = joyR(), a = SET.btnAlpha;
+  ctx.globalAlpha = a;
+  ctx.beginPath(); ctx.arc(JOY.ox, JOY.oy, R, 0, TAU); ctx.fillStyle = 'rgba(10,16,34,0.45)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(150,190,255,0.7)'; ctx.lineWidth = 2.5; ctx.stroke();
+  const kx = JOY.ox + JOY.vx * JOY.mag * R, ky = JOY.oy + JOY.vy * JOY.mag * R;
+  ctx.beginPath(); ctx.arc(kx, ky, R * 0.42, 0, TAU); ctx.fillStyle = 'rgba(95,225,255,0.55)'; ctx.fill();
+  ctx.strokeStyle = '#eaffff'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.globalAlpha = 1;
 }
 
 // ---- 현상수배 전단: '사냥 대상: 이름' (등장) / '사냥 완료' 도장 (처치) -------------------
@@ -4482,7 +4632,7 @@ function drawRuneReveal(g) {
   ctx.restore();
   if (r.phase === 'back') {
     txt(ctx, '카드를 클릭하거나 옆으로 밀어서 뒤집으세요', VW / 2, 470, 16, '#c6d2ee', 'center', 600);
-    txt(ctx, 'Space: 바로 보기', VW / 2, 496, 13, C.dim, 'center', 700);
+    txt(ctx, SET.mobile ? '탭: 바로 보기' : `${kn('use')}: 바로 보기`, VW / 2, 496, 13, C.dim, 'center', 700);
   } else if (r.phase === 'shown') {   // 설명
     const a = Math.min(1, r.st / 0.3);
     ctx.globalAlpha = a;
@@ -4490,9 +4640,9 @@ function drawRuneReveal(g) {
     panel(ctx, x, y, w, 120, col, 0.9);
     const lines = wrapText(ctx, info.desc, 16, w - 40, 600);
     lines.slice(0, 2).forEach((ln, i) => txt(ctx, ln, VW / 2, y + 30 + i * 24, 16, '#e8eefc', 'center', 600));
-    const sub = r.stack ? `사용 횟수 +${r.stack}회  (현재 ${r.uses}회)` : `${r.slot + 1}번 슬롯에 장착` + (info.kind === 'consumable' ? '  ·  숫자키·휠로 고르고 우클릭/Space로 사용' : '  ·  항상 작동');
+    const sub = r.stack ? `사용 횟수 +${r.stack}회  (현재 ${r.uses}회)` : `${r.slot + 1}번 슬롯에 장착` + (info.kind === 'consumable' ? (SET.mobile ? '  ·  슬롯을 누르면 사용' : `  ·  숫자키·휠로 고르고 우클릭/${kn('use')}로 사용`) : '  ·  항상 작동');
     txt(ctx, sub, VW / 2, y + 88, 13, C.gold, 'center', 700);
-    if (r.st > 0.25) txt(ctx, '클릭하거나 Space를 눌러 계속', VW / 2, y + 146, 13, C.dim, 'center', 700);
+    if (r.st > 0.25) txt(ctx, SET.mobile ? '탭해서 계속' : `클릭하거나 ${kn('use')}를 눌러 계속`, VW / 2, y + 146, 13, C.dim, 'center', 700);
     ctx.globalAlpha = 1;
   }
 }
@@ -4531,11 +4681,11 @@ function drawMinimap(g) {
 }
 /** 룬석 슬롯: 아이콘, 키 번호, 남은 횟수, 쿨타임, 지속시간, 선택 표시 */
 function drawRuneSlots(g) {
-  const rs = g.player.runes, n = rs.slots.length, size = 56, gap = 6;
+  const rs = g.player.runes, n = rs.slots.length, size = SET.mobile ? Math.round(64 * SET.btnScale) : 56, gap = 6;
   const x0 = VW - 16 - (n * size + (n - 1) * gap), y0 = VH - 16 - size;
   for (let i = 0; i < n; i++) {
     const st = rs.slots[i], sel = i === rs.selected, x = x0 + i * (size + gap);
-    hot(x, y0, size, size, () => rs.select(i));
+    hot(x, y0, size, size, () => SET.mobile ? g.tapRune(i) : rs.select(i));   // 모바일: 누르면 바로 사용
     rr(ctx, x, y0, size, size, 9); ctx.fillStyle = 'rgba(8,12,26,0.85)'; ctx.fill();
     if (st) {
       const col = runeColor(st.id), spent = st.spent;
@@ -4557,7 +4707,7 @@ function drawRuneSlots(g) {
   }
   const st = rs.slots[rs.selected];
   if (st) {
-    let hint = st.info.kind === 'consumable' && !st.spent ? '  [우클릭 / Space]' : '';
+    let hint = st.info.kind === 'consumable' && !st.spent ? (SET.mobile ? '  [슬롯 터치]' : `  [우클릭 / ${kn('use')}]`) : '';
     if (st.spent) hint = '  (소진)';
     const s = `[${rs.selected + 1}] ${st.info.name}: ${st.info.desc}${hint}`, w = textW(ctx, s, 13, 600) + 20;
     rr(ctx, VW - 16 - w, y0 - 32, w, 24, 7); ctx.fillStyle = 'rgba(6,8,16,0.7)'; ctx.fill();
@@ -4657,7 +4807,7 @@ function drawLevelUp(g) {
     rr(ctx, bx, by, bw, bh, 10); ctx.fillStyle = 'rgba(14,20,42,0.6)'; ctx.fill(); ctx.strokeStyle = 'rgba(120,150,220,0.2)'; ctx.lineWidth = 1.2; ctx.stroke();
     txt(ctx, lu.rerolls > 0 && !ok ? '리롤할 아이템 없음' : `리롤  (${lu.rerolls}회 남음)`, VW / 2, by + bh / 2 + 1, 16, '#55607c', 'center', 700);
   }
-  txt(ctx, 'R', bx + bw - 16, by + bh / 2 + 1, 12, C.dim, 'right', 800);
+  if (!SET.mobile) txt(ctx, kn('reroll'), bx + bw - 16, by + bh / 2 + 1, 12, C.dim, 'right', 800);
 }
 
 // ---- 일시정지 ------------------------------------------------------------------
@@ -4684,9 +4834,9 @@ function drawPause(g) {
   button(60, 260, 252, 48, '메인 메뉴', () => App.toMenu());
   txt(ctx, '설정', 62, 344, 14, C.gray, 'left', 800);
   settingRows(56, 360, 260, true);
-  txt(ctx, 'WASD 이동  ·  T 조준 전환', 186, 566, 12, C.dim, 'center', 600);
-  txt(ctx, '1~5 · 휠 룬석 선택  ·  우클릭/Space 사용', 186, 586, 12, C.dim, 'center', 600);
-  txt(ctx, 'ESC 계속하기  ·  M 소리 끄기', 186, 606, 12, C.dim, 'center', 600);
+  const hints = SET.mobile ? ['화면을 끌어 이동  ·  조준 스위치 터치', '룬석 슬롯 터치: 바로 사용', '계속하기를 눌러 돌아가기']
+    : [`${kn('up')}${kn('left')}${kn('down')}${kn('right')} 이동  ·  ${kn('aim')} 조준 전환`, `${kn('rune1')}~${kn('rune5')} · 휠 룬석 선택  ·  우클릭/${kn('use')} 사용`, `${kn('pause')} 계속하기  ·  ${kn('mute')} 소리 끄기`];
+  hints.forEach((h, i) => txt(ctx, h, 186, 590 + i * 20, 12, C.dim, 'center', 600));
 
   // 오른쪽: [장비] 무기 / 버프 / 룬석   |   [누적 데미지] 무기별 표   — Tab으로 전환
   const ax = 352, ay = 60, aw = VW - ax - 36, ah = 600;
@@ -4697,7 +4847,7 @@ function drawPause(g) {
     ctx.strokeStyle = on ? '#5fe1ff' : 'rgba(120,150,220,0.3)'; ctx.lineWidth = on ? 2 : 1.2; ctx.stroke();
     txt(ctx, s, tx + tw / 2, ty + th / 2 + 1, 16, on ? '#eaffff' : C.gray, 'center', 800);
   });
-  txt(ctx, 'Tab 전환', ax + 352, 33, 12, C.dim, 'left', 700);
+  if (!SET.mobile) txt(ctx, 'Tab 전환', ax + 352, 33, 12, C.dim, 'left', 700);
   panel(ctx, ax, ay, aw, ah, '#6fa8ff', 0.92, 16);
   if (g.pauseTab === 1) { drawDmgTable(g, ax + 18, ay + 12, aw - 36, ah - 30, { rh: 36, dps: true }); return; }
   const cols = [
@@ -4764,6 +4914,7 @@ function drawGameOver(g) {
   if (o.qualifies && !o.submitted) {
     txt(ctx, `TOP 5 진입!  ${who} 명단에 남길 이름을 알려 주세요  (Enter · 최대 10글자)`, VW / 2, 318, 15, C.gold, 'center', 700);
     rr(ctx, VW / 2 - 160, 336, 320, 46, 10); ctx.fillStyle = 'rgba(8,12,26,0.95)'; ctx.fill(); ctx.strokeStyle = '#56e08a'; ctx.lineWidth = 2; ctx.stroke();
+    if (o.t > 1.15) button(VW / 2 + 172, 336, 90, 46, '등록', () => App.submitName(), { col: '#56e08a' });   // 모바일 키보드용 등록 버튼
   } else if (o.submitted) txt(ctx, `${who} 명단 ${o.rank + 1}위에 기록됐어요`, VW / 2, 350, 17, '#56e08a', 'center', 700);
   else txt(ctx, '이번에는 TOP 5에 들지 못했어요', VW / 2, 350, 15, C.gray, 'center', 600);
   panel(ctx, VW / 2 - 420, 400, 400, 202, '#6fa8ff', 0.9, 12);
@@ -4862,7 +5013,8 @@ function drawMenuBody(t) {
 
   panel(ctx, 456, py, pw, ph, '#6fa8ff', 0.86);
   txt(ctx, '조작법', 476, py + 24, 15, C.gray, 'left', 800);
-  [['W A S D', '이동'], ['T', '자동 / 수동 조준 전환'], ['1 ~ 5 · 휠', '룬석 슬롯 선택'], ['우클릭 · Space', '선택한 룬석 사용'], ['ESC', '일시정지'], ['M', '효과음 켜기 / 끄기']].forEach(([k, v], i) => {
+  (SET.mobile ? [['화면 끌기', '이동 (누른 곳에 조이스틱)'], ['조준 스위치', '자동 / 이동 방향 조준'], ['룬석 슬롯', '누르면 바로 사용'], ['II 버튼', '일시정지'], ['카드 · 버튼', '눌러서 고르기'], ['설정', '키 · 버튼 설정에서 크기 조절']]
+    : [[`${kn('up')} ${kn('left')} ${kn('down')} ${kn('right')}`, '이동'], [kn('aim'), '자동 / 수동 조준 전환'], [`${kn('rune1')} ~ ${kn('rune5')} · 휠`, '룬석 슬롯 선택'], [`우클릭 · ${kn('use')}`, '선택한 룬석 사용'], [kn('pause'), '일시정지'], [kn('mute'), '효과음 켜기 / 끄기']]).forEach(([k, v], i) => {
     const y = py + 58 + i * 27;
     txt(ctx, k, 478, y, 14, '#5fe1ff', 'left', 800); txt(ctx, v, 610, y, 14, '#c6d2ee', 'left', 600);
   });
@@ -5045,6 +5197,85 @@ function drawStory() {
 }
 
 // =============================================================================
+// 키 · 버튼 설정 창 — 설정 칸의 [키 · 버튼 설정]으로 열림 (메뉴 / 일시정지 어디서나)
+//   왼쪽: PC 키 바꾸기 (누른 뒤 원하는 키 입력, ESC 취소, 겹치면 서로 맞바꿈)
+//   오른쪽: 모바일 버튼 크기 · 투명도
+// =============================================================================
+const BTN_SCALES = [0.85, 1, 1.2, 1.4], BTN_ALPHAS = [0.4, 0.6, 0.8, 1];
+const KeyEdit = {
+  open: false, wait: null,
+  show() { this.open = true; this.wait = null; },
+  close() { this.open = false; this.wait = null; },
+  /** 창이 열려 있으면 키 입력을 여기서 처리 (true = 처리함) */
+  onKey(code) {
+    if (!this.open) return false;
+    if (this.wait) {
+      if (code !== 'Escape') { bindKey(this.wait, code); sfx('click'); }
+      this.wait = null;
+    } else if (code === 'Escape') this.close();
+    return true;
+  },
+};
+function cycleRow(x, y, w, label, val, fn) {
+  const hov = hot(x, y, w, 34, fn);
+  rr(ctx, x, y, w, 34, 8); ctx.fillStyle = hov ? 'rgba(90,140,255,0.18)' : 'rgba(255,255,255,0.04)'; ctx.fill();
+  txt(ctx, label, x + 14, y + 18, 15, hov ? '#fff' : '#c6d2ee', 'left', 600);
+  txt(ctx, val, x + w - 14, y + 18, 15, '#ff9a2e', 'right', 800);
+}
+function drawKeyEdit() {
+  if (!KeyEdit.open) return;
+  hot(0, 0, VW, VH, () => { KeyEdit.wait = null; });   // 창 바깥은 눌러도 아무 일 없음 (대기 중이면 취소)
+  dim(0.72);
+  const X = 150, Y = 46, W = VW - 300, H = VH - 92;
+  panel(ctx, X, Y, W, H, '#6fa8ff', 0.97, 16);
+  glowTxt(ctx, '키 · 버튼 설정', VW / 2, Y + 34, 26, C.gold, 'center', 800, 12);
+
+  // ---- 왼쪽: PC 키 ----
+  const lx = X + 28, lw = 500, ly = Y + 74, rh = 31;
+  txt(ctx, 'PC 키', lx, ly, 16, '#5fe1ff', 'left', 800);
+  txt(ctx, '바꿀 칸을 누르고 원하는 키를 입력  ·  ESC 취소', lx + 64, ly + 1, 12, C.dim, 'left', 600);
+  KEY_ACTIONS.forEach(([a, label], i) => {
+    const y = ly + 20 + i * rh, waiting = KeyEdit.wait === a;
+    if (i % 2 === 0) { ctx.fillStyle = 'rgba(120,150,220,0.05)'; ctx.fillRect(lx - 8, y, lw + 16, rh); }
+    txt(ctx, label, lx + 4, y + rh / 2, 14, '#dfe7fb', 'left', 600);
+    const bw = 150, bx = lx + lw - bw, by = y + 3, bh = rh - 6;
+    const hov = hot(bx, by, bw, bh, () => { KeyEdit.wait = waiting ? null : a; });
+    rr(ctx, bx, by, bw, bh, 7);
+    ctx.fillStyle = waiting ? 'rgba(255,216,74,0.18)' : hov ? 'rgba(90,140,255,0.25)' : 'rgba(10,16,34,0.9)'; ctx.fill();
+    ctx.strokeStyle = waiting ? C.gold : KEYMAP[a] !== KEY_DEFAULT[a] ? 'rgba(255,154,46,0.8)' : 'rgba(120,150,220,0.4)'; ctx.lineWidth = waiting ? 2 : 1.2; ctx.stroke();
+    const s = waiting ? (Math.floor(App.t * 3) % 2 ? '키를 누르세요…' : '') : kn(a);
+    txt(ctx, s, bx + bw / 2, by + bh / 2 + 1, 14, waiting ? C.gold : '#fff', 'center', 800);
+  });
+  txt(ctx, '방향키 · ESC는 항상 같이 작동해요.  주황 테두리 = 기본에서 바꾼 키', lx, ly + 20 + KEY_ACTIONS.length * rh + 16, 12, C.dim, 'left', 600);
+
+  // ---- 오른쪽: 모바일 버튼 ----
+  const rx = X + 580, rw = W - 580 - 28;
+  ctx.fillStyle = 'rgba(120,150,220,0.2)'; ctx.fillRect(rx - 26, ly - 10, 1.5, H - 150);
+  txt(ctx, '모바일 버튼', rx, ly, 16, '#ff9a2e', 'left', 800);
+  cycleRow(rx, ly + 22, rw, '버튼 크기', Math.round(SET.btnScale * 100) + '%', () => { SET.btnScale = BTN_SCALES[(BTN_SCALES.indexOf(SET.btnScale) + 1) % BTN_SCALES.length]; saveSettings(); });
+  cycleRow(rx, ly + 64, rw, '조이스틱 · 버튼 투명도', Math.round(SET.btnAlpha * 100) + '%', () => { SET.btnAlpha = BTN_ALPHAS[(BTN_ALPHAS.indexOf(SET.btnAlpha) + 1) % BTN_ALPHAS.length]; saveSettings(); });
+  // 미리보기: 조이스틱 + 룬석 슬롯 크기
+  const pcx = rx + 110, pcy = ly + 230, R = joyR();
+  txt(ctx, '미리보기', rx, ly + 120, 13, C.dim, 'left', 700);
+  ctx.globalAlpha = SET.btnAlpha;
+  ctx.beginPath(); ctx.arc(pcx, pcy, R, 0, TAU); ctx.fillStyle = 'rgba(10,16,34,0.6)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(150,190,255,0.7)'; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(pcx + R * 0.45 * Math.cos(App.t * 1.5), pcy + R * 0.45 * Math.sin(App.t * 1.5), R * 0.42, 0, TAU); ctx.fillStyle = 'rgba(95,225,255,0.55)'; ctx.fill();
+  ctx.globalAlpha = 1;
+  const ss = Math.round(64 * SET.btnScale);
+  rr(ctx, rx + rw - ss - 10, pcy - ss / 2, ss, ss, 9); ctx.fillStyle = 'rgba(8,12,26,0.85)'; ctx.fill(); ctx.strokeStyle = C.gold; ctx.lineWidth = 2; ctx.stroke();
+  drawRuneIcon(ctx, 'nova', rx + rw - ss / 2 - 10, pcy, 14 * SET.btnScale, C.runeAtk);
+  txt(ctx, '룬석 슬롯', rx + rw - ss / 2 - 10, pcy + ss / 2 + 14, 12, C.dim, 'center', 600);
+  const note = SET.mobile ? '지금 조작: 모바일' : "설정의 '조작'을 모바일로 바꾸면 적용돼요";
+  txt(ctx, note, rx, ly + 360, 13, SET.mobile ? '#ff9a2e' : C.gray, 'left', 700);
+  txt(ctx, '모바일: 화면 아무 곳이나 끌면 조이스틱,', rx, ly + 386, 12, C.dim, 'left', 600);
+  txt(ctx, '룬석 슬롯을 누르면 바로 사용해요.', rx, ly + 404, 12, C.dim, 'left', 600);
+
+  button(VW / 2 - 200, Y + H - 62, 180, 44, '기본값으로', () => { resetKeys(); SET.btnScale = 1; SET.btnAlpha = 0.6; saveSettings(); KeyEdit.wait = null; });
+  button(VW / 2 + 20, Y + H - 62, 180, 44, '닫기', () => KeyEdit.close(), { col: '#56e08a' });
+}
+
+// =============================================================================
 // 랭킹 (모드별 TOP 5 — 이 브라우저에 저장됨)
 //   무한 생존: 구출까지 버틴 시간 · 랭킹전: 최종 점수
 // =============================================================================
@@ -5108,19 +5339,21 @@ const App = {
     if (this.nameShown) { this.nameShown = false; this.nameEl.style.display = 'none'; this.nameEl.blur(); }
   },
   onKey(code) {
-    if (code === 'KeyM') { SET.sound = !SET.sound; saveSettings(); return; }
+    if (isKey(code, 'mute')) { SET.sound = !SET.sound; saveSettings(); return; }
     if (this.scene === 'menu') { if (code === 'Enter' || code === 'Space') this.begin(); return; }
     if (this.scene === 'story') { if (code === 'Escape') Story.escape(); else if (code === 'Enter' || code === 'Space') Story.advance(); return; }
     const g = this.game;
-    if (g.over) { if ((code === 'Enter' || code === 'KeyR') && g.over.t > 1.2 && (!g.over.qualifies || g.over.submitted)) this.restart(); return; }
+    if (g.over) { if ((code === 'Enter' || isKey(code, 'reroll')) && g.over.t > 1.2 && (!g.over.qualifies || g.over.submitted)) this.restart(); return; }
     g.onKey(code);
   },
+  /** 누른 곳의 버튼 실행 (true = 무언가를 눌렀음) */
   onClick() {
     for (let i = UI.hot.length - 1; i >= 0; i--) {
       const h = UI.hot[i];
-      if (MOUSE.x >= h.x && MOUSE.x <= h.x + h.w && MOUSE.y >= h.y && MOUSE.y <= h.y + h.h) { sfx('click'); h.fn(); return; }
+      if (MOUSE.x >= h.x && MOUSE.x <= h.x + h.w && MOUSE.y >= h.y && MOUSE.y <= h.y + h.h) { sfx('click'); h.fn(); return true; }
     }
-    if (this.scene === 'story') Story.advance();
+    if (this.scene === 'story') { Story.advance(); return true; }
+    return false;
   },
 };
 
@@ -5128,28 +5361,66 @@ window.addEventListener('keydown', e => {
   SFX.init();
   if (e.target === App.nameEl) { if (e.key === 'Enter' && !e.isComposing) App.submitName(); return; }
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) e.preventDefault();
+  if (KeyEdit.open) { e.preventDefault(); if (!e.repeat) KeyEdit.onKey(e.code); return; }   // 키 설정 창이 키를 가져감
   if (e.repeat) return;
   KEYS.add(e.code);
   App.onKey(e.code);
 });
 window.addEventListener('keyup', e => KEYS.delete(e.code));
-window.addEventListener('blur', () => {
-  KEYS.clear();
-  const g = App.game;   // 창을 벗어나면 자동으로 일시정지
+/** 창을 벗어나면 자동으로 일시정지 */
+function autoPause() {
+  KEYS.clear(); joyEnd();
+  const g = App.game;
   if (g && !g.over && !g.weaponSel && !g.levelup && !g.runeReveal) g.paused = true;
+}
+// 모바일은 화면이 실제로 가려질 때만 (전체 화면 전환 등으로 잠깐 포커스가 빠지는 것은 무시)
+window.addEventListener('blur', () => { if (!SET.mobile) autoPause(); else { KEYS.clear(); } });
+document.addEventListener('visibilitychange', () => { if (document.hidden) autoPause(); });
+// ---- 마우스 · 터치 (포인터 이벤트로 함께 처리) ----
+const evPos = e => [(e.clientX - OFF_X) / CSS_S, (e.clientY - OFF_Y) / CSS_S];
+/** 지금 조이스틱을 쓸 수 있는 상황인지 (게임 진행 중, 다른 창 없음) */
+const canJoy = () => { const g = App.game; return SET.mobile && App.scene === 'game' && g && !g.over && !g.paused && !g.levelup && !g.weaponSel && !g.runeReveal && !g.rescue && !KeyEdit.open; };
+// 캔버스 바깥(위아래·좌우 여백)을 눌러도 받도록 창 전체에서 받음 — 여백을 끌면 브라우저가 스크롤/전체 화면 해제로 받아들이던 문제
+window.addEventListener('pointerdown', e => {
+  if (e.target === App.nameEl) return;   // 이름 입력칸은 그대로
+  SFX.init();
+  if (e.pointerType === 'mouse' && e.button === 2) { toLogical(e); if (App.game && !KeyEdit.open) App.game.onRightClick(); return; }
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { /* 무시 */ }
+  if (JOY.id !== null && e.pointerId !== JOY.id) {   // 조이스틱을 쥔 채 다른 손가락으로 누름: 마우스 위치는 건드리지 않고 버튼만 확인
+    const [x, y] = evPos(e), mx = MOUSE.x, my = MOUSE.y;
+    MOUSE.x = x; MOUSE.y = y; App.onClick(); MOUSE.x = mx; MOUSE.y = my;
+    return;
+  }
+  toLogical(e);
+  const g = App.game;
+  if (!KeyEdit.open && App.scene === 'game' && g.runeReveal && !g.over && !g.paused) { g.revealDown(); return; }
+  if (App.onClick()) return;
+  if (canJoy()) joyStart(e.pointerId, clamp(MOUSE.x, 0, VW), clamp(MOUSE.y, 0, VH));   // 버튼이 아닌 곳: 그 자리에 조이스틱
 });
-window.addEventListener('mousemove', e => { toLogical(e); if (App.game && App.game.runeReveal) App.game.revealMove(); });
-window.addEventListener('mouseup', e => { if (e.button === 0 && App.game && App.game.runeReveal) App.game.revealUp(); });
-cv.addEventListener('mousedown', e => {
-  SFX.init(); toLogical(e);
-  if (e.button === 0 && App.scene === 'game' && App.game.runeReveal && !App.game.over && !App.game.paused) App.game.revealDown();
-  else if (e.button === 0) App.onClick();
-  else if (e.button === 2 && App.game) App.game.onRightClick();
+window.addEventListener('pointermove', e => {
+  if (e.pointerId === JOY.id) { const [x, y] = evPos(e); joyMove(x, y); return; }
+  if (JOY.id !== null && e.pointerType !== 'mouse') return;
+  toLogical(e);
+  if (App.game && App.game.runeReveal) App.game.revealMove();
 });
+const pointerEnd = e => {
+  if (e.pointerId === JOY.id) { joyEnd(); return; }
+  if (App.game && App.game.runeReveal && (e.pointerType !== 'mouse' || e.button === 0)) App.game.revealUp();
+};
+window.addEventListener('pointerup', pointerEnd);
+window.addEventListener('pointercancel', pointerEnd);
+// 터치로 화면이 밀리거나 확대되지 않게 (iOS: 끌기 · 두 손가락 확대) — 누르기/떼기는 막지 않음 (전체 화면 요청이 터치로 인정되도록)
+document.addEventListener('touchmove', e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
+document.addEventListener('dblclick', e => e.preventDefault(), { passive: false });
 cv.addEventListener('wheel', e => { e.preventDefault(); if (App.game) App.game.onWheel(e.deltaY); }, { passive: false });
 window.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('resize', resize);
 document.addEventListener('fullscreenchange', resize);
+window.addEventListener('orientationchange', () => { resize(); setTimeout(resize, 150); setTimeout(resize, 500); });
+if (window.visualViewport) visualViewport.addEventListener('resize', resize);
 
 function render() {
   UI.hot.length = 0;
@@ -5157,6 +5428,7 @@ function render() {
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = C.bg; ctx.fillRect(0, 0, VW, VH);
   drawScene();
+  drawOverlays();
   if (App.fade > 0) { ctx.globalAlpha = App.fade; ctx.fillStyle = '#03050b'; ctx.fillRect(0, 0, VW, VH); ctx.globalAlpha = 1; }   // 장면 전환 페이드
 }
 function drawScene() {
@@ -5167,8 +5439,9 @@ function drawScene() {
   bloomPass();
   drawThreats(g);
   drawScreenFx(g);
-  drawHUD(g);
-  drawRescueHud(g);
+  drawOffscreenArrows(g);
+  withUi(SET.mobile ? 1.25 : 1, () => { drawHUD(g); drawRescueHud(g); });   // 모바일: 게임 중 HUD를 크게
+  if (canJoy()) drawJoystick(); else if (JOY.id !== null && App.game && (App.game.levelup || App.game.paused || App.game.over)) joyEnd();
   if (g.paused) drawPause(g);   // 무기·증강 선택 중에 눌러도 일시정지 화면이 위에 뜸
   else if (g.weaponSel) drawWeaponSelect(g);
   else if (g.runeReveal) drawRuneReveal(g);
@@ -5178,12 +5451,14 @@ function drawScene() {
     if (g.over.qualifies && !g.over.submitted && g.over.t > 1.15) App.showName();
   }
 }
+function drawOverlays() { drawKeyEdit(); }
 
 let _last = 0;
 function frame(now) {
   // 프레임 간격(초). 최대 50ms로 제한해 창 이동 등으로 멈췄다 돌아올 때 튀는 것을 방지
   const dt = clamp((now - _last) / 1000, 0, 0.05);
   _last = now;
+  checkResize();
   App.t += dt;
   if (App.fade > 0) App.fade = Math.max(0, App.fade - dt * 3);
   FX.trauma = Math.max(0, FX.trauma - dt * 1.7);
