@@ -564,8 +564,9 @@ const Arena = {
 const BASIC_IDS = ['cannon', 'sword', 'claw'];
 const TRAITS = ['', '', '특성: 룬석 칸 +1 (5칸)  흡혈 룬석 기본 장착'];
 
-/** 레벨업 필요 경험치: 5레벨 단위로 300씩 증가 (성장 속도를 1/3로 늦춤: 예전 100씩의 3배) */
-const xpRequired = lv => (Math.floor((lv - 1) / 5) + 1) * 300;
+/** 레벨업 필요 경험치: 5레벨 단위로 300씩 증가 (성장 속도를 1/3로 늦춤: 예전 100씩의 3배)
+ *  단, 10레벨까지는 3/4만 (1~5: 225, 6~10: 450 → 11~15: 900, 16~20: 1200 …) */
+const xpRequired = lv => Math.round((Math.floor((lv - 1) / 5) + 1) * 300 * (lv <= 10 ? 0.75 : 1));
 
 const MAX_WEAPONS = 7, MAX_BUFFS = 7;
 /** 무한 생존에서는 나오지 않는 아이템 (점수 증가는 랭킹전에서 추가 예정) */
@@ -4428,7 +4429,7 @@ function drawHUD(g) {
   drawRuneSlots(g);
 
   // 자동/수동 조준 스위치 [조준 키] — 모바일은 크게
-  const mob = SET.mobile, aw = mob ? 176 : 160, ah = mob ? 40 : 30, ax = 170, ay = VH - 16 - ah;
+  const mob = SET.mobile, aw = mob ? 176 : 160, ah = mob ? 40 : 30, ax = 16, ay = VH - 16 - ah;   // 미니맵이 위로 가서 왼쪽 아래 구석으로
   const hov = hot(ax, ay, aw, ah, () => { g.autoAim = !g.autoAim; });
   rr(ctx, ax, ay, aw, ah, 8); ctx.fillStyle = hov && !mob ? 'rgba(40,60,110,0.85)' : 'rgba(8,12,26,0.8)'; ctx.fill();
   ctx.strokeStyle = g.autoAim ? '#2fd07a' : 'rgba(120,150,220,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
@@ -4693,7 +4694,7 @@ function drawRuneReveal(g) {
   }
 }
 function drawMinimap(g) {
-  const mm = 140, x0 = 16, y0 = VH - 16 - mm, s = mm / MAP_W, p = g.player;
+  const mm = 140, x0 = 16, y0 = 146, s = mm / MAP_W, p = g.player;   // 왼쪽 위: 무기·버프 슬롯 바로 아래
   panel(ctx, x0, y0, mm, mm, '#6fa8ff', 0.8, 8);
   ctx.save(); rr(ctx, x0, y0, mm, mm, 8); ctx.clip();
   ctx.fillStyle = 'rgba(180,123,255,0.7)';
