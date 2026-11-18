@@ -72,6 +72,8 @@ function fmtTime(t) {
   const m = Math.floor(d / 600), s = (d % 600) / 10;
   return String(m).padStart(2, '0') + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
 }
+const lerp = (a, b, k) => a + (b - a) * k;
+const angDiff = (a, b) => { let d = (a - b) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };   // 두 각도의 차 (-π~π)
 let DMG_SINK = null;   // 지금 진행 중인 게임 (누적 데미지 기록용)
 const fmtNum = n => Math.round(n).toLocaleString('en-US');
 
@@ -565,15 +567,11 @@ const BASIC_IDS = ['cannon', 'sword', 'claw'];
 const TRAITS = ['', '', '특성: 룬석 칸 +1 (5칸)  흡혈 룬석 기본 장착'];
 
 /** 레벨업 필요 경험치 (5레벨 단위로 같은 값)
- *  1~5: 170, 6~10: 340 (초반은 빠르게)
- *  11~15: 650 (완충 구간 — 340과 960 사이)
- *  16~: 원래 방식(5레벨마다 +300)의 4/5 → 16~20: 960, 21~25: 1200, 26~30: 1440 … */
+ *  1~5: 200 · 6~10: 350 · 11~15: 630 · 16~20: 900 · 21~25: 1250 · 이후 5레벨마다 +250 */
+const XP_TABLE = [200, 350, 630, 900, 1250];
 const xpRequired = lv => {
-  const tier = Math.floor((lv - 1) / 5) + 1;   // 1~5 → 1, 6~10 → 2, …
-  if (tier === 1) return 170;
-  if (tier === 2) return 340;
-  if (tier === 3) return 650;
-  return Math.round(tier * 300 * 0.8 / 10) * 10;
+  const tier = Math.floor((lv - 1) / 5);   // 1~5 → 0, 6~10 → 1, …
+  return tier < XP_TABLE.length ? XP_TABLE[tier] : XP_TABLE[XP_TABLE.length - 1] + 250 * (tier - XP_TABLE.length + 1);
 };
 
 const MAX_WEAPONS = 7, MAX_BUFFS = 7;
@@ -582,14 +580,14 @@ const OFFER_EXCLUDE = new Set(['score_up']);
 
 // id → { type: 'skill'|'buff', name, short, max }
 const ITEMS = {
-  cannon: { type: 'skill', name: '대포', short: '관통하는 포환 발사', max: 5 },
+  cannon: { type: 'skill', name: '대포', short: '관통하는 포환, 끝에서 폭발', max: 5 },
   sword: { type: 'skill', name: '프리즘 소드', short: '검기를 휘둘러 발사', max: 5 },
   claw: { type: 'skill', name: '흡혈귀의 손톱', short: '네 줄로 할퀴기', max: 5 },
   shield: { type: 'skill', name: '방어막', short: '주변에 지속 피해', max: 5 },
   missile: { type: 'skill', name: '미사일', short: '화면 곳곳에 폭격', max: 5 },
   laser: { type: 'skill', name: '레이저', short: '관통·반사 레이저', max: 5 },
   rifle: { type: 'skill', name: '소총', short: '가까운 적에게 연사', max: 5 },
-  grenade: { type: 'skill', name: '수류탄', short: '주변에 피해 장판', max: 5 },
+  grenade: { type: 'skill', name: '수류탄', short: '주변에 던져 폭발 · 넉백 · 감속', max: 5 },
   orb: { type: 'skill', name: '자석 구체', short: '주위를 돌며 밀어냄', max: 5 },
   mine: { type: 'skill', name: '지뢰', short: '밟으면 폭발', max: 5 },
   plasma: { type: 'skill', name: '플라즈마 소총', short: '적을 관통하는 고출력 탄', max: 5 },
@@ -895,10 +893,17 @@ class Shield extends Skill {
 }
 
 // ---- 미사일 ------------------------------------------------------------------
+/** 미사일 그림: +x 방향을 향한 작은 로켓 (빨간 탄두 · 흰 몸통 · 날개) */
+const missileSpr = () => sprite('missile', 18, g => {
+  g.fillStyle = '#3a4258'; poly(g, [[-9, -2.5], [-13, -6.5], [-6, -2.5]]); g.fill(); poly(g, [[-9, 2.5], [-13, 6.5], [-6, 2.5]]); g.fill();   // 날개
+  g.fillStyle = '#e9edf6'; rr(g, -10, -2.8, 15, 5.6, 2.2); g.fill();                                                                    // 몸통
+  g.fillStyle = '#ff4d4d'; poly(g, [[5, -2.8], [11, 0], [5, 2.8]]); g.fill();                                                            // 탄두
+  g.fillStyle = '#ff9a2e'; g.fillRect(-3, -2.8, 2, 5.6);                                                                                // 띠
+});
 class Missile extends Skill {
   static BLAST = [20, 30, 41];
   static FALL = 0.4;
-  constructor() { super(); this.t = 0; this.fx = []; this.patches = []; }
+  constructor() { super(); this.t = 0; this.fx = []; this.patches = []; this.flashes = []; }
   get rate() { return grow(4, 8, this.L) / this.cd; }
   get blastR() { return Math.floor(grow(20, 41, this.L) * this.area); }
   get damage() { return grow(2, 4, this.L); }
@@ -909,7 +914,9 @@ class Missile extends Skill {
     this.t += dt;
     while (this.t >= this.interval) {
       this.t -= this.interval;
-      this.fx.push({ x: rand(g.cam.x, g.cam.x + VW), y: rand(g.cam.y, g.cam.y + VH), r: this.blastR, dmg: this.damage, dot: this.dot, age: 0 });
+      const x = rand(g.cam.x, g.cam.x + VW), y = rand(g.cam.y, g.cam.y + VH), side = Math.random() < 0.5 ? -1 : 1;
+      // 화면 위쪽 비스듬한 곳에서 날아와 꽂힘 (좌우 방향은 무작위)
+      this.fx.push({ x, y, sx: x + side * rand(120, 200), sy: y - rand(380, 460), r: this.blastR, dmg: this.damage, dot: this.dot, age: 0 });
     }
     let j = 0;
     for (const e of this.fx) {
@@ -917,14 +924,23 @@ class Missile extends Skill {
       if (e.age >= Missile.FALL) {
         for (const m of g.mons) if (dist(e.x, e.y, m.x, m.y) < e.r) m.hp -= e.dmg;
         this.patches.push({ x: e.x, y: e.y, r: e.r, dot: e.dot, age: 0, tick: 0 });   // 2초짜리 지속 피해 장판
-        FX.burst(e.x, e.y, '#ffb347', 5, 170, 0.25, 2);
-        FX.ring(e.x, e.y, e.r * 0.3, e.r * 1.2, 0.22, '#ffb347', 2.5);
+        this.flashes.push({ x: e.x, y: e.y, r: e.r, t: 0 });
+        if (g.inView(e.x, e.y, e.r)) {   // 착탄: 불꽃 + 파편 + 충격파
+          FX.burst(e.x, e.y, '#ffd36a', 10, 300, 0.3, 2.6); FX.burst(e.x, e.y, '#ff6a2a', 8, 200, 0.4, 3); FX.burst(e.x, e.y, '#3a2a22', 5, 260, 0.45, 2.2);
+          FX.ring(e.x, e.y, e.r * 0.3, e.r * 1.4, 0.24, '#ffd36a', 3);
+          FX.mote(e.x, e.y - 4, '#5a4a44', rand(-15, 15), -30, 0.7, e.r * 0.6);
+          FX.shake(0.05, 0.15);
+        }
         sfx('thud');
         continue;
       }
+      const k = e.age / Missile.FALL, q = k * k, mx = lerp(e.sx, e.x, q), my = lerp(e.sy, e.y, q);   // 점점 빨라지며 떨어짐
+      if (g.inView(mx, my, 40) && Math.random() < dt * 45) FX.mote(mx + rand(-2, 2), my + rand(-2, 2), '#8a8090', rand(-8, 8), rand(-8, 8), 0.45, 5);   // 연기 꼬리
       this.fx[j++] = e;
     }
     this.fx.length = j;
+    for (const f of this.flashes) f.t += dt;
+    this.flashes = this.flashes.filter(f => f.t < 0.18);
     j = 0;
     for (const pt of this.patches) {
       pt.age += dt; pt.tick += dt;
@@ -935,14 +951,31 @@ class Missile extends Skill {
   }
   drawUnder(g) {
     for (const pt of this.patches) if (g.inView(pt.x, pt.y, pt.r)) drawZone('#ff8a2e', pt.x, pt.y, pt.r, 0.6 * (1 - pt.age / 2));
-    for (const e of this.fx) if (g.inView(e.x, e.y, e.r)) glowRing(e.x, e.y, e.r * (1.2 - 0.6 * e.age / Missile.FALL), '#ff9a2e', 1.5, 0.25 + 0.5 * e.age / Missile.FALL);
+    for (const e of this.fx) {   // 착탄 지점: 좁혀지는 조준 표시
+      if (!g.inView(e.x, e.y, e.r)) continue;
+      const k = e.age / Missile.FALL;
+      drawReticle(e.x, e.y, e.r * (1.1 - 0.45 * k), k * 1.5, '#ff6a3a', 0.3 + 0.55 * k, 1.8);
+    }
   }
   drawOver(g) {
-    for (const e of this.fx) {
-      if (!g.inView(e.x, e.y, 260)) continue;
-      const k = 1 - e.age / Missile.FALL, hx = e.x + k * 70, hy = e.y - k * 240;
-      glowLine([[hx + 16, hy - 55], [hx, hy]], '#ff9a2e', 3, 0.9);
-      drawGlow('#ffcf7a', hx, hy, 9);
+    for (const e of this.fx) {   // 미사일 본체 + 불꽃 꼬리
+      const k = e.age / Missile.FALL, q = k * k, x = lerp(e.sx, e.x, q), y = lerp(e.sy, e.y, q);
+      if (!g.inView(x, y, 60)) continue;
+      const a = Math.atan2(e.y - e.sy, e.x - e.sx), cx = Math.cos(a), cy = Math.sin(a), fl = 0.8 + 0.4 * Math.random();
+      ctx.globalCompositeOperation = 'lighter';
+      glowLine([[x - cx * 34 * fl, y - cy * 34 * fl], [x - cx * 10, y - cy * 10]], '#ff8a2e', 6, 0.75);
+      glowLine([[x - cx * 20 * fl, y - cy * 20 * fl], [x - cx * 10, y - cy * 10]], '#fff2b0', 2.5, 1);
+      drawGlow('#ffb347', x - cx * 12, y - cy * 12, 14 * fl, 0.8);
+      ctx.globalCompositeOperation = 'source-over';
+      drawSpr(missileSpr(), x, y, a, 1);
+    }
+    for (const f of this.flashes) {   // 착탄 섬광
+      if (!g.inView(f.x, f.y, f.r * 2)) continue;
+      const k = f.t / 0.18;
+      ctx.globalCompositeOperation = 'lighter';
+      drawGlow('#ffffff', f.x, f.y, f.r * (0.8 + 0.6 * k), 0.9 * (1 - k));
+      drawGlow('#ff9a2e', f.x, f.y, f.r * (1.2 + 0.8 * k), 0.7 * (1 - k));
+      ctx.globalCompositeOperation = 'source-over';
     }
   }
 }
@@ -1118,36 +1151,82 @@ class Patch {
 }
 
 class Grenade extends Skill {
-  static RADII = [50, 75, 110];
-  static BASE_INTERVAL = Patch.DURATION + 0.5;
-  constructor() { super(); this.t = Grenade.BASE_INTERVAL; this.patches = []; }   // 시작하자마자 첫 투척
+  // 장판 없이 '폭발'만: 피해 2배 · 범위 1.2배 · 투척 간격 4/5 · 넉백 + 0.4초 감속 15%
+  static BASE_INTERVAL = (Patch.DURATION + 0.5) * 0.8;   // 3.2초
+  static RADIUS_MULT = 1.2;
+  static KB = 28;
+  static SLOW_T = 0.4;            // 맞은 적: 0.4초 동안 이동 속도 -15% (effSpeed 참고)
+  static FLIGHT = 0.28;           // 던져서 터지기까지
+  constructor() { super(); this.t = Grenade.BASE_INTERVAL; this.nades = []; this.booms = []; }   // 시작하자마자 첫 투척
   get interval() { return Grenade.BASE_INTERVAL * this.cd; }
-  get count() { return this.L; }   // 장판 개수 = 레벨
-  get radius() { return Math.floor(grow(50, 110, this.L) * this.area); }
-  get blast() { return grow(3, 7, this.L); }
-  get dot() { return grow(1, 3, this.L); }
-  lines() { return [`장판 ${this.count}개 · 범위 ${this.radius}px`, `폭발 ${n1(this.blast)} · 장판 0.3초당 ${n1(this.dot)}`, `${this.interval.toFixed(1)}초마다 투척`]; }
-  positions(p) {   // Lv1=위/아래, Lv2=정삼각형, Lv3=정사각형
+  get count() { return this.L; }   // 수류탄 개수 = 레벨
+  get radius() { return Math.floor(grow(50, 110, this.L) * Grenade.RADIUS_MULT * this.area); }
+  get blast() { return grow(3, 7, this.L) * 2; }
+  lines() { return [`수류탄 ${this.count}개 · 폭발 범위 ${this.radius}px`, `폭발 피해 ${n1(this.blast)} · 넉백 · 0.4초 감속 15%`, `${this.interval.toFixed(1)}초마다 투척`]; }
+  positions(p) {   // Lv1=위, Lv2=위/아래, Lv3~=정다각형
     const r = this.radius, n = this.count;
     if (n === 1) return [[p.x, p.y - r]];
     if (n === 2) return [[p.x, p.y - r], [p.x, p.y + r]];
     return Array.from({ length: n }, (_, i) => [p.x + Math.cos(rad(i * 360 / n)) * r, p.y + Math.sin(rad(i * 360 / n)) * r]);
   }
   update(dt, g) {
+    const p = g.player;
     this.t += dt;
-    if (this.t >= this.interval) {
+    if (this.t >= this.interval) {   // 던지기: 플레이어에게서 포물선으로 날아감
       this.t = 0;
-      for (const [x, y] of this.positions(g.player)) {
-        this.patches.push(new Patch(x, y, this.radius, this.blast, this.dot));
-        FX.burst(x, y, '#8dff8f', 10, 240, 0.35, 2.4);
-        FX.ring(x, y, this.radius * 0.2, this.radius, 0.3, '#8dff8f', 3);
-      }
-      FX.shake(0.1, 0.25); sfx('boom');
+      for (const [x, y] of this.positions(p)) this.nades.push({ sx: p.x, sy: p.y, x, y, age: 0, r: this.radius, dmg: this.blast, spin: rand(-12, 12) });
+      sfx('launch');
     }
-    for (const pt of this.patches) pt.update(dt, g.mons);
-    this.patches = this.patches.filter(pt => !pt.done);
+    let j = 0;
+    for (const n of this.nades) {
+      n.age += dt;
+      if (n.age >= Grenade.FLIGHT) { this.explode(g, n); continue; }
+      this.nades[j++] = n;
+    }
+    this.nades.length = j;
+    for (const b of this.booms) b.t += dt;
+    this.booms = this.booms.filter(b => b.t < 0.42);
   }
-  drawUnder(g) { for (const pt of this.patches) pt.draw(g); }
+  explode(g, n) {
+    const { x, y, r } = n;
+    for (const m of g.mons) {
+      if (m.kind === 'crate' && dist(x, y, m.x, m.y) >= r + m.r) continue;
+      if (dist(x, y, m.x, m.y) < r + m.r * 0.5) {
+        m.hp -= n.dmg;
+        if (m.kind !== 'crate') { g.knockback(m, x, y, Grenade.KB, 0.18); m.gslow = Grenade.SLOW_T; }
+      }
+    }
+    this.booms.push({ x, y, r, t: 0 });
+    if (g.inView(x, y, r)) {
+      FX.burst(x, y, '#ffd36a', 22, 380, 0.45, 3); FX.burst(x, y, '#ff6a2a', 16, 260, 0.55, 3.4); FX.burst(x, y, '#ffffff', 6, 200, 0.2, 2.4);
+      FX.ring(x, y, r * 0.2, r * 1.05, 0.28, '#ffe08a', 5); FX.ring(x, y, r * 0.5, r * 1.35, 0.4, '#ff8a3d', 2.5);
+      for (let k = 0; k < 6; k++) { const a = rand(0, TAU), d = rand(0, r * 0.6); FX.mote(x + Math.cos(a) * d, y + Math.sin(a) * d, '#6a5a52', Math.cos(a) * 30, Math.sin(a) * 30 - 20, 0.7, r * 0.35); }   // 연기
+      FX.shake(0.18, 0.4); sfx('boom');
+    }
+  }
+  drawUnder(g) {   // 떨어질 자리 표시
+    for (const n of this.nades) if (g.inView(n.x, n.y, n.r)) glowRing(n.x, n.y, n.r * (1.15 - 0.15 * n.age / Grenade.FLIGHT), '#ffb347', 1.5, 0.25 + 0.4 * n.age / Grenade.FLIGHT);
+  }
+  drawOver(g) {
+    for (const n of this.nades) {   // 날아가는 수류탄 (포물선, 빙글빙글)
+      const k = n.age / Grenade.FLIGHT, x = lerp(n.sx, n.x, k), y = lerp(n.sy, n.y, k) - Math.sin(Math.PI * k) * 60;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(n.spin * n.age);
+      ctx.fillStyle = '#2f5a2c'; ctx.strokeStyle = '#a8ff9a'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(0, 0, 7, 8.5, 0, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#cfd6c6'; ctx.fillRect(-3, -12, 6, 4);
+      ctx.restore();
+      drawGlow('#ffe08a', x + 2, y - 11, 6, 0.9);   // 불붙은 신관
+    }
+    for (const b of this.booms) {   // 폭발 불덩이: 하얗게 번쩍 → 주황 불꽃 → 사그라듦
+      if (!g.inView(b.x, b.y, b.r * 1.3)) continue;
+      const k = b.t / 0.42, e = 1 - (1 - k) ** 3;
+      ctx.globalCompositeOperation = 'lighter';
+      if (k < 0.25) drawGlow('#ffffff', b.x, b.y, b.r * (0.6 + 1.2 * k), 1 - k * 3);
+      drawGlow('#ff8a2e', b.x, b.y, b.r * (0.5 + 0.9 * e), 0.9 * (1 - k));
+      drawGlow('#ffd36a', b.x, b.y, b.r * (0.3 + 0.5 * e), 0.8 * (1 - k));
+      ctx.globalCompositeOperation = 'source-over';
+    }
+  }
 }
 
 // =============================================================================
@@ -1182,14 +1261,41 @@ class BasicWeapon extends Skill {
 class Cannon extends BasicWeapon {
   static SPEED = 11;
   static KB = 20;
-  constructor() { super(0); this.balls = []; }
-  // 포환 지름 = 원래 부채꼴(사거리 380, 15°) 현 길이의 절반 ≈ 50px
-  get radius() { return this.baseRange * Math.sin(rad(this.baseAngle / 2)) / 2 * (1 + 0.04 * this.aoeLv); }
-  get maxDist() { return this.baseRange + this.rangeBonus; }
-  lines() { return [`포환 피해 ${this.damage} · 관통 · 넉백`, `지름 ${(this.radius * 2).toFixed(0)}px · 비행 ${this.maxDist}px`, `${this.interval.toFixed(2)}초마다 발사`]; }
+  static BOOM_SIZE = 2.5;     // 끝 사거리 폭발 지름 = 포환 지름의 2.5배
+  static BOOM_DMG = 1.35;     // 폭발 피해 = 포환 피해의 1.35배
+  static BOOM_KB = 30;
+  static SIZE_PER_LV = 0.06;  // 포환 크기: 레벨마다 +6% (Lv5 +24%)
+  static RANGE_MULT = 5 / 6;  // 사거리 5/6 (폭발이 더 가까이에서)
+  // 발사 충격파: 포구 앞 부채꼴 — 피해 = 포환의 1/4, 사거리 = 포환 사거리의 1/5, 각도 Lv1 110° + 레벨마다 5°
+  static BLAST_DMG = 1 / 4; static BLAST_RANGE = 1 / 5; static BLAST_KB = 16;
+  // 피해 배율: Lv1 = 8 (11의 8/11), Lv5 = 22 → 레벨마다 +3.5
+  static mult(L) { return (8 + 3.5 * (L - 1)) / CHARS[0].atk; }
+  constructor() { super(0); this.balls = []; this.booms = []; this.muzzles = []; }
+  // 포환 지름 = 원래 부채꼴(사거리 380, 15°) 현 길이의 절반 ≈ 50px, 레벨·범위 버프로 커짐
+  get radius() { return this.baseRange * Math.sin(rad(this.baseAngle / 2)) / 2 * (1 + 0.04 * this.aoeLv) * (1 + Cannon.SIZE_PER_LV * (this.L - 1)); }
+  get maxDist() { return Math.round((this.baseRange + this.rangeBonus) * Cannon.RANGE_MULT); }
+  get blastDmg() { return Math.max(1, Math.round(this.damage * Cannon.BLAST_DMG)); }
+  get blastR() { return Math.round(this.maxDist * Cannon.BLAST_RANGE); }
+  get blastAngle() { return 110 + 5 * (this.L - 1); }
+  get boomDmg() { return Math.round(this.damage * Cannon.BOOM_DMG); }
+  lines() { return [`포환 ${this.damage} · 사거리 ${this.maxDist}px · 끝 폭발 ${this.boomDmg}`, `발사 충격파 ${this.blastDmg} · ${this.blastR}px · ${this.blastAngle}°`, `포환 지름 ${(this.radius * 2).toFixed(0)}px · ${this.interval.toFixed(2)}초마다`]; }
   fire(g) {
     const p = g.player, a = rad(p.face);
-    this.balls.push({ x: p.x, y: p.y, dx: Math.cos(a), dy: Math.sin(a), r: this.radius, dmg: this.damage, max: this.maxDist, trav: 0, hit: new Set() });
+    this.balls.push({ x: p.x, y: p.y, dx: Math.cos(a), dy: Math.sin(a), r: this.radius, dmg: this.damage, boom: this.boomDmg, max: this.maxDist, trav: 0, hit: new Set() });
+    // 발사 충격파: 화약이 터지며 포구 앞 부채꼴로 밀쳐냄
+    const R = this.blastR, half = rad(this.blastAngle / 2), bd = this.blastDmg;
+    for (const m of g.mons) {
+      const d = dist(p.x, p.y, m.x, m.y);
+      if (d > R + m.r) continue;
+      if (d > m.r && Math.abs(angDiff(Math.atan2(m.y - p.y, m.x - p.x), a)) > half + Math.asin(Math.min(1, m.r / d))) continue;
+      m.hp -= bd;
+      g.knockback(m, p.x, p.y, Cannon.BLAST_KB, 0.12);
+    }
+    this.muzzles.push({ x: p.x, y: p.y, a, R, half, t: 0 });
+    for (let k = 0; k < 14; k++) {   // 작은 불꽃이 부채꼴로 튐
+      const aa = a + rand(-half, half) * 0.9;
+      FX.spray(p.x + Math.cos(aa) * 18, p.y + Math.sin(aa) * 18, aa, 0.08, k % 3 ? '#ffb347' : '#fff2b0', 1, rand(260, 520), rand(0.12, 0.24), rand(1.6, 2.6));
+    }
     FX.spray(p.x + Math.cos(a) * 22, p.y + Math.sin(a) * 22, a, 0.5, '#cfe0ff', 8, 320, 0.25, 2.4);
     FX.shake(0.07, 0.2); sfx('cannon'); p.recoil = 1;
   }
@@ -1208,10 +1314,29 @@ class Cannon extends BasicWeapon {
         }
       }
       if (Math.random() < dt * 40) FX.mote(b.x + rand(-b.r, b.r) * 0.5, b.y + rand(-b.r, b.r) * 0.5, '#9fb6ff', -b.dx * 40, -b.dy * 40, 0.3, b.r * 0.5);
-      if (b.trav >= b.max - 1e-6) { FX.burst(b.x, b.y, '#9fb6ff', 8, 160, 0.3, 2); FX.ring(b.x, b.y, b.r * 0.5, b.r * 1.5, 0.2, '#9fb6ff', 2); continue; }
+      if (b.trav >= b.max - 1e-6) { this.explode(g, b); continue; }   // 끝 사거리: 폭발
       this.balls[j++] = b;
     }
     this.balls.length = j;
+    for (const e of this.booms) e.t += dt;
+    this.booms = this.booms.filter(e => e.t < 0.36);
+    for (const e of this.muzzles) e.t += dt;
+    this.muzzles = this.muzzles.filter(e => e.t < 0.16);
+  }
+  explode(g, b) {
+    const R = b.r * Cannon.BOOM_SIZE;
+    for (const m of g.mons) {
+      if (dist(b.x, b.y, m.x, m.y) < R + m.r * 0.5) {
+        m.hp -= b.boom;
+        g.knockback(m, b.x, b.y, Cannon.BOOM_KB, 0.18);
+      }
+    }
+    this.booms.push({ x: b.x, y: b.y, r: R, t: 0 });
+    if (g.inView(b.x, b.y, R)) {
+      FX.burst(b.x, b.y, '#cfe0ff', 18, 360, 0.4, 2.8); FX.burst(b.x, b.y, '#7f9cff', 12, 240, 0.5, 3);
+      FX.ring(b.x, b.y, R * 0.25, R, 0.26, '#dfe8ff', 4); FX.ring(b.x, b.y, R * 0.5, R * 1.25, 0.36, '#7f9cff', 2);
+      FX.shake(0.12, 0.3); sfx('boom');
+    }
   }
   drawOver(g) {
     for (const b of this.balls) {
@@ -1223,6 +1348,23 @@ class Cannon extends BasicWeapon {
       ctx.fillStyle = 'rgba(110,140,255,0.3)'; ctx.fill();
       ctx.strokeStyle = '#c4d4ff'; ctx.lineWidth = 2.5; ctx.globalAlpha = 0.9; ctx.stroke(); ctx.globalAlpha = 1;
       drawGlow('#e6eeff', b.x - r * 0.28, b.y - r * 0.28, r * 0.6, 0.6);
+    }
+    for (const e of this.muzzles) {   // 발사 충격파: 부채꼴로 퍼지는 화약 불빛
+      const k = e.t / 0.16, r = e.R * (0.45 + 0.65 * (1 - (1 - k) ** 2));
+      ctx.globalCompositeOperation = 'lighter';
+      const gr = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, r);
+      gr.addColorStop(0, rgba('#fff2b0', 0.55 * (1 - k))); gr.addColorStop(0.6, rgba('#ff9a2e', 0.35 * (1 - k))); gr.addColorStop(1, 'rgba(255,120,40,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.arc(e.x, e.y, r, e.a - e.half, e.a + e.half); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = rgba('#ffd36a', 0.7 * (1 - k)); ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(e.x, e.y, r, e.a - e.half, e.a + e.half); ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    for (const e of this.booms) {   // 끝 사거리 폭발: 푸른 섬광
+      if (!g.inView(e.x, e.y, e.r * 1.3)) continue;
+      const k = e.t / 0.36, q = 1 - (1 - k) ** 3;
+      ctx.globalCompositeOperation = 'lighter';
+      if (k < 0.3) drawGlow('#ffffff', e.x, e.y, e.r * (0.5 + q), 1 - k * 3);
+      drawGlow('#7f9cff', e.x, e.y, e.r * (0.5 + 0.8 * q), 0.85 * (1 - k));
+      ctx.globalCompositeOperation = 'source-over';
     }
   }
 }
@@ -2276,7 +2418,7 @@ function mkBoss(x, y, speed, hp = BOSS.HP) {
   Object.assign(m, { state: 'chase', timer: rand(2.5, 3.5), last: null, aimX: 0, aimY: 1, cdx: 0, cdy: 0, clen: 0, fireAcc: 0, slashI: 0, forced: null, thrownOnce: false });
   return m;
 }
-const effSpeed = m => Math.max(0, m.speed - m.slow - (m.wslow > 0 ? 1 : 0) - (m.zslow > 0 ? 1 : 0));
+const effSpeed = m => Math.max(0, m.speed - m.slow - (m.wslow > 0 ? 1 : 0) - (m.zslow > 0 ? 1 : 0)) * (m.gslow > 0 ? 0.85 : 1);   // gslow: 수류탄 감속 15%
 
 // ---- 이동 / 행동 --------------------------------------------------------------
 function updMon(m, dt, g) {
@@ -2858,7 +3000,7 @@ function drawMons(g) {
 // 플레이어
 // =============================================================================
 class Player {
-  static INVULN = 0.35;   // 피격 후 무적 시간 (초)
+  static INVULN = 0.35 * 1.4;   // 피격 후 무적 시간 (초) — 0.49초
   constructor(ci) {
     const c = CHARS[ci];
     this.ci = ci; this.r = 16;
@@ -2977,6 +3119,7 @@ class Game {
   static XP_VALUE = 10; static XP_PICKUP = 60; static XP_MAGNET_SPEED = 45;
   static DROP_PICKUP = 45; static CHEST_PICKUP = 50;
   static SEP_CELL = 64; static SEP_STRENGTH = 0.5;
+  static EARLY_TIME = 120; static EARLY_DMG = 0.75;   // 초반 완화: 2분 전까지 받는 피해 3/4
   static ATK_PER_MIN = 0.15;        // 시간 강화: 1분마다 몬스터 공격력 +15% (상한 없음)
   static SPAWN_PER_MIN = 0.12;      // 시간 강화: 1분마다 스폰율 +12% (상한 없음)
   static CRATE_XP_CHANCE = 0.8; static CRATE_XP = 30;   // 보급 상자 80%는 '꽝' = 경험치 30
@@ -3132,6 +3275,7 @@ class Game {
   hurtPlayer(dmg) {
     if (this.rescue || this.over) return;   // 구출 중에는 피해 없음
     dmg *= this.atkMult;   // 몬스터가 주는 모든 피해는 시간이 지날수록 강해짐
+    if (this.elapsed < Game.EARLY_TIME) dmg *= Game.EARLY_DMG;   // 초반(2분 전)에는 몸통·탄환 피해 3/4
     const p = this.player;
     if (p.invulnT > 0 || p.runes.isInvulnerable()) return;
     if (p.runes.absorb()) {   // 보호막이 막음
@@ -3789,6 +3933,7 @@ class Game {
     const mult = runes.damageMult();
     for (const m of mons) {
       if (m.wslow > 0) m.wslow -= dt;
+      if (m.gslow > 0) m.gslow -= dt;
       if (m.zslow > 0) m.zslow -= dt;
     }
     for (const [id, sk] of [...p.skills]) this.trackDmg(id, () => sk.update(dt, this), mult);   // 무기마다 준 피해를 따로 기록
