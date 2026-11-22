@@ -604,12 +604,12 @@ const ITEMS = {
   spd_up: { type: 'buff', name: '공격 속도 증가', short: '레벨당 쿨타임 -6%', max: 5 },
   range_up: { type: 'buff', name: '사거리 증가', short: '레벨당 사거리 +15px', max: 5 },
   aoe_up: { type: 'buff', name: '범위 증가', short: '레벨당 스킬 범위 +8%', max: 5 },
-  def_up: { type: 'buff', name: '방어력 증가', short: '레벨당 받는 피해 -10%', max: 5 },
+  def_up: { type: 'buff', name: '방어력 증가', short: '레벨당 받는 피해 -9%', max: 5 },
   hp_up: { type: 'buff', name: 'HP 증가', short: '레벨당 최대 HP +10%', max: 5 },
   xp_up: { type: 'buff', name: 'XP 증가', short: '레벨당 XP 획득량 +12%', max: 5 },
   score_up: { type: 'buff', name: '점수 증가', short: '레벨당 점수 +10%', max: 5 },
   magnet_up: { type: 'buff', name: '자석 범위 증가', short: '레벨당 오브 끌어오는 거리 +45%', max: 5 },
-  move_up: { type: 'buff', name: '이동 속도 증가', short: '레벨당 이동 속도 +14%', max: 5 },
+  move_up: { type: 'buff', name: '이동 속도 증가', short: '레벨당 이동 속도 +11%', max: 5 },
 };
 const ITEM_ORDER = Object.keys(ITEMS);
 // 융합 무기: (재료 1, 재료 2) — 둘 다 3레벨이면 보스류 보물상자에서 획득
@@ -659,12 +659,12 @@ function itemDesc(id, curLv, player) {
       if (player && player.skills.has('cannon')) return [`스킬 범위 +${n * 8}%`, `포환 크기 +${n * 4}%`];
       if (player && (player.skills.has('sword') || player.skills.has('claw'))) return [`스킬 범위 +${n * 8}%`, `기본 무기 각도 +${n * 5}°`];
       return [`스킬 범위 +${n * 8}%`];
-    case 'def_up': return [`받는 피해 -${n * 10}%`];
+    case 'def_up': return [`받는 피해 -${n * 9}%`];
     case 'hp_up': return [`최대 HP +${n * 10}%`];
     case 'xp_up': return [`XP 획득량 +${n * 12}%`];
     case 'score_up': return [`점수 획득량 +${n * 10}%`];
     case 'magnet_up': return [`오브 끌어오는 거리 +${n * 45}%`, `(${Math.round(Game.XP_PICKUP * (1 + n * 0.45))}px)`];
-    case 'move_up': return [`이동 속도 +${n * 14}%`];
+    case 'move_up': return [`이동 속도 +${n * 11}%`];
   }
   return [];
 }
@@ -872,7 +872,8 @@ class Shield extends Skill {
   get interval() { return Shield.INTERVAL * this.cd; }
   static SIZE_MULT = 1.1;   // 기본 크기 +10%
   get radius() { return Math.floor(grow(50, 105, this.L) * Shield.SIZE_MULT * this.area); }
-  get damage() { return grow(3, 5, this.L); }
+  static GROWTH = 2 / 3;   // 레벨당 피해 증가폭은 원래의 2/3 (Lv1 3은 그대로, Lv5 6.25 → 5.17)
+  get damage() { return 3 + (grow(3, 5, this.L) - 3) * Shield.GROWTH; }
   lines() { return [`범위 ${this.radius}px`, `${this.interval.toFixed(2)}초마다 ${n1(this.damage)} 피해`, '항상 작동하는 오라']; }
   update(dt, g) {
     this.t += dt; this.hitPulse = Math.max(0, this.hitPulse - dt * 5);
@@ -1262,16 +1263,18 @@ class BasicWeapon extends Skill {
 // ---- 대포 --------------------------------------------------------------------
 class Cannon extends BasicWeapon {
   static SPEED = 11;
-  static KB = 20;
-  static BOOM_SIZE = 2.5;     // 끝 사거리 폭발 지름 = 포환 지름의 2.5배
+  static KB_MULT = 1.2;       // 넉백 전체 120%
+  static KB = 20 * Cannon.KB_MULT;
+  static BOOM_SIZE = 2.5 * 1.35;   // 끝 사거리 폭발 지름 = 포환 지름의 3.375배 (2.5배의 1.35배)
   static BOOM_DMG = 1.35;     // 폭발 피해 = 포환 피해의 1.35배
-  static BOOM_KB = 30;
+  static BOOM_KB = 30 * Cannon.KB_MULT;
   static SIZE_PER_LV = 0.06;  // 포환 크기: 레벨마다 +6% (Lv5 +24%)
   static RANGE_MULT = 5 / 6;  // 사거리 5/6 (폭발이 더 가까이에서)
   // 발사 충격파: 포구 앞 부채꼴 — 피해 = 포환의 1/4, 사거리 = 포환 사거리의 1/5, 각도 Lv1 110° + 레벨마다 5°
-  static BLAST_DMG = 1 / 4; static BLAST_RANGE = 1 / 5; static BLAST_KB = 16;
-  // 피해 배율: Lv1 = 8 (11의 8/11), Lv5 = 22 → 레벨마다 +3.5
-  static mult(L) { return (8 + 3.5 * (L - 1)) / CHARS[0].atk; }
+  static BLAST_DMG = 1 / 4; static BLAST_RANGE = 1 / 5; static BLAST_KB = 16 * Cannon.KB_MULT;
+  // 피해 배율: (Lv1 8 → Lv5 22, 레벨마다 +3.5)의 140% → Lv1 11, Lv5 31
+  static DMG_MULT = 1.4;
+  static mult(L) { return (8 + 3.5 * (L - 1)) * Cannon.DMG_MULT / CHARS[0].atk; }
   constructor() { super(0); this.balls = []; this.booms = []; this.muzzles = []; }
   // 포환 지름 = 원래 부채꼴(사거리 380, 15°) 현 길이의 절반 ≈ 50px, 레벨·범위 버프로 커짐
   get radius() { return this.baseRange * Math.sin(rad(this.baseAngle / 2)) / 2 * (1 + 0.04 * this.aoeLv) * (1 + Cannon.SIZE_PER_LV * (this.L - 1)); }
@@ -1487,13 +1490,14 @@ class ClawSwipe {
   static SWEEP = 0.10;
   static LIFE = 0.30;
   static FRACS = [0.2, 0.45, 0.7, 0.95];   // 4줄 — 사거리 145 기준 줄 간격 약 36px, 판정 띠가 서로 겹쳐 빈틈이 없다
+  static OVERLAP = 0.5;   // 겹쳐 맞을 때 추가 줄의 피해 배율
   static HALF_T = 8;   // 줄 반두께 최솟값 — 사거리가 늘면 줄 사이가 벌어지지 않도록 같이 굵어진다
   constructor(face, angle, R, dmg, dir) {
     this.sgn = dir > 0 ? 1 : -1;
     this.aStart = face - this.sgn * angle / 2;
     this.span = angle; this.R = R; this.dmg = dmg; this.t = 0;
     this.ht = Math.max(ClawSwipe.HALF_T, 0.14 * R - 13);   // 판정 반두께 (그려지는 두께와 같음)
-    this.hit = ClawSwipe.FRACS.map(() => new Set()); this.done = false;
+    this.hit = ClawSwipe.FRACS.map(() => new Set()); this.any = new Set(); this.done = false;
   }
   rAt(i, u) { return this.R * ClawSwipe.FRACS[i] * (0.9 + 0.2 * u); }
   update(dt, px, py, mons) {
@@ -1512,7 +1516,11 @@ class ClawSwipe {
       const u = clamp(rel / this.span, 0, 1);
       for (let i = 0; i < ClawSwipe.FRACS.length; i++) {
         if (this.hit[i].has(m)) continue;
-        if (Math.abs(d - this.rAt(i, u)) <= this.ht + m.r) { m.hp -= this.dmg; this.hit[i].add(m); }
+        if (Math.abs(d - this.rAt(i, u)) <= this.ht + m.r) {
+          // 같은 할퀴기에서 두 번째 줄부터는 절반 피해 (두 줄이 겹치면 1.5배)
+          m.hp -= this.any.has(m) ? this.dmg * ClawSwipe.OVERLAP : this.dmg;
+          this.hit[i].add(m); this.any.add(m);
+        }
       }
     }
   }
@@ -1887,11 +1895,11 @@ class Vulcan extends Gun {
 // ---- 테슬라 번개: 주변 적 여러 마리에게 낙뢰 (범위 공격이라 한 발 피해는 낮게) ----
 class Lightning extends Skill {
   constructor() { super(); this.t = 1.2; this.bolts = []; }
-  get interval() { return 2.1 * this.cd; }
-  get targets() { return this.L + 1; }        // 2 → 6마리
-  get damage() { return 6 + (this.L - 1); }   // 6 → 10
-  get range() { return 620 + this.rangeBonus; }
-  lines() { return [`${this.interval.toFixed(1)}초마다 낙뢰`, `주변 적 ${this.targets}마리 · ${n1(this.damage)} 피해`, `범위 ${this.range}px`]; }
+  get interval() { return 2.1 * 0.75 * this.cd; }   // 낙뢰 간격 3/4: 2.1초 → 1.575초
+  get targets() { return (this.L + 1) * 2; }          // 낙뢰 수 2배: 4 → 12마리
+  get damage() { return (6 + (this.L - 1)) * 1.5; }   // 피해 1.5배: 9 → 15
+  get range() { return Math.round(620 * 1.15) + this.rangeBonus; }   // 범위 1.15배: 620 → 713px
+  lines() { return [`${this.interval.toFixed(2)}초마다 낙뢰`, `주변 적 ${this.targets}마리 · ${n1(this.damage)} 피해`, `범위 ${this.range}px`]; }
   update(dt, g) {
     this.t += dt;
     const p = g.player;
@@ -1920,9 +1928,12 @@ class Homing extends Skill {
   static SPEED = 540 / 60; static TURN = 6; static LIFE = 2.4;
   constructor() { super(); this.t = 1.6; this.ms = []; }
   get interval() { return 2.4 * this.cd; }
-  get count() { return this.L; }
+  static COUNT_MULT = 2.5;   // 발 수 = 레벨 × 2.5 (반올림): 3 / 5 / 8 / 10 / 13
+  static BOSS_MULT = 1.2;    // 보스·중간보스에게 1.2배
+  get count() { return Math.round(this.L * Homing.COUNT_MULT); }
   get damage() { return 8 + 2 * (this.L - 1); }   // 8 → 16
-  lines() { return [`${this.interval.toFixed(1)}초마다 유도탄 ${this.count}발`, `한 발 ${n1(this.damage)} 피해`, '보스·중간보스를 먼저 노림']; }
+  get blastR() { return Math.round(20 * this.area); }   // 폭발 범위 = 미사일 1레벨 범위 (20px)
+  lines() { return [`${this.interval.toFixed(1)}초마다 유도탄 ${this.count}발`, `한 발 ${n1(this.damage)} 피해 · 폭발 ${this.blastR}px`, '보스·중간보스 우선 · 1.2배 피해']; }
   pick(g, p) {
     const list = g.mons.filter(m => m.kind !== 'crate' && m.hp > 0);
     list.sort((a, b) => (b.tier - a.tier) || (dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y)));
@@ -1958,10 +1969,14 @@ class Homing extends Skill {
       if (Math.random() < 0.5) FX.mote(m.x, m.y, '#ff9a5a', 0, 0, 0.3, 5);
       let hit = null;
       for (const e of g.mons) if (segDist(ox, oy, m.x, m.y, e.x, e.y) < e.r + 7) { hit = e; break; }
-      if (hit) {
-        hit.hp -= m.dmg;
+      if (hit) {   // 부딪힌 자리에서 작은 폭발: 범위 안 적 모두 피해
+        const R = this.blastR;
+        for (const e of g.mons) {
+          if (e !== hit && dist(m.x, m.y, e.x, e.y) > R + e.r) continue;
+          e.hp -= m.dmg * (e.tier > 0 ? Homing.BOSS_MULT : 1);
+        }
         g.knockback(hit, m.x - Math.cos(m.a) * 10, m.y - Math.sin(m.a) * 10, 10, 0.15);
-        FX.burst(m.x, m.y, '#ff6a5a', 10, 260, 0.3, 2.2); FX.ring(m.x, m.y, 4, 30, 0.22, '#ff6a5a', 3);
+        FX.burst(m.x, m.y, '#ff6a5a', 10, 260, 0.3, 2.2); FX.ring(m.x, m.y, 4, R * 1.3, 0.22, '#ff6a5a', 3);
         continue;
       }
       if (m.life > 0) this.ms[j++] = m;
@@ -3038,7 +3053,7 @@ class Player {
     const atk = this.buffLv('atk_up'), spd = this.buffLv('spd_up'), rng = this.buffLv('range_up'), aoe = this.buffLv('aoe_up');
     const newMax = Math.round(this.baseHp * (1 + this.buffLv('hp_up') * 0.10)), diff = newMax - this.maxHp;
     this.maxHp = newMax; this.hp = Math.min(this.maxHp, this.hp + diff);
-    this.dmgReduce = this.buffLv('def_up') * 0.10;
+    this.dmgReduce = this.buffLv('def_up') * 0.09;
     this.xpMult = 1 + this.buffLv('xp_up') * 0.12;
     this.scoreMult = 1 + this.buffLv('score_up') * 0.10;
     for (const sk of this.skills.values()) {
@@ -3092,7 +3107,7 @@ class Player {
     if (dx || dy) { const l = Math.hypot(dx, dy); dx /= l; dy /= l; }
     else if (SET.mobile) { const j = joyVec(); if (j) { dx = j[0]; dy = j[1]; k = 0.35 + 0.65 * j[2]; } }   // 모바일 조이스틱 (살짝 밀면 천천히)
     if (dx || dy) this.moveAng = Math.atan2(dy, dx);   // 모바일 수동 조준: 마지막으로 움직인 방향
-    const s = k * this.spd * (1 + this.buffLv('move_up') * 0.14) * this.runeSpd * dt * 60;
+    const s = k * this.spd * (1 + this.buffLv('move_up') * 0.11) * this.runeSpd * dt * 60;
     this.x = Arena.cx(this.x + dx * s, this.r);
     this.y = Arena.cy(this.y + dy * s, this.r);
     this.moving = !!(dx || dy);
@@ -3241,8 +3256,8 @@ class Game {
   knockback(m, ox, oy, distance, dur = 0.3) {
     let dx = m.x - ox, dy = m.y - oy, l = Math.hypot(dx, dy);
     if (l < 0.001) { const a = rand(0, TAU); dx = Math.cos(a); dy = Math.sin(a); l = 1; }
-    if (m.kind === 'crate') return;
-    if (m.tier > 0) distance *= 0.5;
+    if (m.kind === 'crate' || m.kind === 'brute') return;   // 탱커 '철갑 추적체'는 넉백을 받지 않음 (경계선도 뚫고 들어옴)
+    if (m.tier > 0) distance *= 0.25;   // 보스·중간보스는 1/4만 (예전 절반의 절반)
     m.kb = [dx / l, dy / l, distance, 0, dur, 0];   // [방향x, 방향y, 총거리, 경과, 지속, 이동한 비율]
   }
   _stepKb(o, dt, pad) {
