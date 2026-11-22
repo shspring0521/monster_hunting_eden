@@ -567,9 +567,11 @@ const BASIC_IDS = ['cannon', 'sword', 'claw'];
 const TRAITS = ['', '', '특성: 룬석 칸 +1 (5칸)  흡혈 룬석 기본 장착'];
 
 /** 레벨업 필요 경험치 (5레벨 단위로 같은 값)
- *  1~5: 200 · 6~10: 350 · 11~15: 630 · 16~20: 900 · 21~25: 1250 · 이후 5레벨마다 +250 */
+ *  1: 100 · 2: 125 · 3: 150 · 4~5: 200 · 6~10: 350 · 11~15: 630 · 16~20: 900 · 21~25: 1250 · 이후 5레벨마다 +250 */
 const XP_TABLE = [200, 350, 630, 900, 1250];
+const XP_START = [100, 125, 150];   // 1→2, 2→3, 3→4 레벨: 첫 성장은 빠르게
 const xpRequired = lv => {
+  if (lv <= XP_START.length) return XP_START[lv - 1];
   const tier = Math.floor((lv - 1) / 5);   // 1~5 → 0, 6~10 → 1, …
   return tier < XP_TABLE.length ? XP_TABLE[tier] : XP_TABLE[XP_TABLE.length - 1] + 250 * (tier - XP_TABLE.length + 1);
 };
@@ -774,7 +776,7 @@ const PULSE_MAX_KB = SHIELD_R_LV2 * 1.2;
 // cat = def(방어류) / atk(공격류), kind = passive / consumable
 const RUNES = {
   barrier: { cat: 'def', kind: 'passive', name: '보호막', desc: '피해를 3회 막고, 깨질 때 폭발 (30 피해 + 밀쳐내기)' },
-  slow: { cat: 'def', kind: 'passive', name: '둔화 오라', desc: '주변 적의 이동속도 감소 (-1.5)' },
+  slow: { cat: 'def', kind: 'passive', name: '둔화 오라', desc: '주변 적 이동속도 50% · 적 탄환 속도 50%' },
   lifesteal: { cat: 'def', kind: 'passive', name: '흡혈', desc: '적 처치 시 일정 확률로 HP 2 회복' },
   invuln: { cat: 'def', kind: 'consumable', name: '이지스', desc: '5초 무적 + 이동속도 30% (2회, 쿨타임 30초)', uses: 2, cd: 30, dur: 5 },
   fire: { cat: 'atk', kind: 'passive', name: '불길', desc: '지나간 길에 8초간 불길 (0.5초당 3 피해)' },
@@ -2145,9 +2147,11 @@ class RuneSystem {
     this.player.runeSpd = mult;
     this.releaseSpent();
 
-    if (this.get('slow')) {   // 둔화 오라 (중간보스·보스 면역)
+    // 둔화 오라: 범위 안 일반 몬스터는 각자 이동 속도의 50%, 적 탄환도 50% 속도 (중간보스·보스 면역)
+    g.slowAura = this.get('slow') ? SLOW_RUNE_R : 0;
+    if (g.slowAura) {
       const p = this.player;
-      for (const m of g.mons) if (m.tier === 0) m.slow = dist(p.x, p.y, m.x, m.y) < SLOW_RUNE_R ? 1.5 : 0;
+      for (const m of g.mons) if (m.tier === 0) m.slow = dist(p.x, p.y, m.x, m.y) < SLOW_RUNE_R ? 1 : 0;
     }
   }
   /** 플레이어 이동 후 호출: 불길 / 충격파 / 보호막 파괴 */
@@ -2366,7 +2370,9 @@ const trackerHp = elapsed => Math.min(32 + Math.floor(elapsed / 30) * 4, 80);
 // 일반 몬스터 조정: 크기 90%, 체력은 초반 60% → 5분에 80% (초반을 덜 버겁게)
 const NORMAL_SIZE = 0.9;
 let ENEMY_CLOCK = 0;   // 게임 경과 시간 (초) — Game이 매 프레임 갱신
-const normalHpMult = t => Math.min(0.8, 0.6 + 0.2 * t / 300);
+// 일반 몬스터 체력 배율: 60%에서 5분까지 80%로, 초반(3분 전)에는 그 값의 85%
+const EARLY_HP_TIME = 180, EARLY_HP_MULT = 0.85;
+const normalHpMult = t => Math.min(0.8, 0.6 + 0.2 * t / 300) * (t < EARLY_HP_TIME ? EARLY_HP_MULT : 1);
 const isNormal = kind => MON[kind].tier === 0 && kind !== 'crate';
 function newMon(kind, x, y, hp, speed) {
   if (isNormal(kind)) hp = Math.max(1, Math.round(hp * normalHpMult(ENEMY_CLOCK)));
@@ -2418,7 +2424,10 @@ function mkBoss(x, y, speed, hp = BOSS.HP) {
   Object.assign(m, { state: 'chase', timer: rand(2.5, 3.5), last: null, aimX: 0, aimY: 1, cdx: 0, cdy: 0, clen: 0, fireAcc: 0, slashI: 0, forced: null, thrownOnce: false });
   return m;
 }
-const effSpeed = m => Math.max(0, m.speed - m.slow - (m.wslow > 0 ? 1 : 0) - (m.zslow > 0 ? 1 : 0)) * (m.gslow > 0 ? 0.85 : 1);   // gslow: 수류탄 감속 15%
+const SLOW_AURA_MON = 0.5, SLOW_AURA_BULLET = 0.5;   // 둔화 오라: 몬스터 이동 / 적 탄환 속도 배율
+const effSpeed = m => Math.max(0, m.speed - (m.wslow > 0 ? 1 : 0) - (m.zslow > 0 ? 1 : 0))
+  * (m.slow ? SLOW_AURA_MON : 1)   // 둔화 오라: 비율로 줄여서 완전히 멈추지는 않음
+  * (m.gslow > 0 ? 0.85 : 1);      // 수류탄 감속 15%
 
 // ---- 이동 / 행동 --------------------------------------------------------------
 function updMon(m, dt, g) {
@@ -4029,7 +4038,8 @@ class Game {
 
     let j = 0;
     for (const b of this.ebullets) {
-      const step = Math.min(b.spd * dt * 60, b.max - b.trav);
+      const slowed = this.slowAura && dist(b.x, b.y, p.x, p.y) < this.slowAura;   // 둔화 오라 안: 탄환도 느려짐
+      const step = Math.min(b.spd * dt * 60 * (slowed ? SLOW_AURA_BULLET : 1), b.max - b.trav);
       const ox = b.x, oy = b.y;
       b.x += b.dx * step; b.y += b.dy * step; b.trav += step;
       if (segDist(ox, oy, b.x, b.y, p.x, p.y) < p.r + b.r) { this.hurtPlayer(b.dmg); FX.burst(b.x, b.y, b.col, 5, 160, 0.25, 2); continue; }
