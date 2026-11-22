@@ -2608,6 +2608,7 @@ function updBoss(b, dt, g) {
         for (let i = 0; i < n; i++) {
           const a = i / n * TAU + rand(-0.2, 0.2), d = rand(90, 170);
           const x = Arena.cx(b.x + Math.cos(a) * d, 15), y = Arena.cy(b.y + Math.sin(a) * d, 15);
+          if (!g.spawnOk(x, y)) continue;   // 보스가 붙어 있어도 내 바로 옆에는 소환하지 않음
           g.mons.push(mkRanged(x, y, spd, g.elapsed));
           FX.burst(x, y, C.ranged, 6, 160, 0.35, 2);
         }
@@ -3121,6 +3122,8 @@ class Game {
   static SPAWN_INTERVAL = 1.3;     // 직선 몬스터 스폰 주기 (초)
   static TRACKER_INTERVAL = 2.0;   // 추적 몬스터 스폰 주기 (초)
   static MIN_DIST = 600;           // 스폰 시 플레이어와의 최소 거리
+  static SPAWN_SAFE = 420;         // 어떤 몬스터든 (흩뿌림·벽 보정·보스 소환 포함) 플레이어 이 거리 안에서는 생기지 않음
+  static PICK_INVULN = 0.2;        // 아이템(무기·증강·융합·룬석)을 고른 직후 무적 시간 (초)
   static WAVE_CYCLE = 60;          // 웨이브 발생 주기
   static WAVE_DURATION = 30;       // 웨이브 지속 시간
   static WARN_DURATION = 3;
@@ -3186,6 +3189,7 @@ class Game {
     this.player = new Player(i); this.prevHp = this.player.hp; this.weaponSel = false;
     for (let k = 0; k < Game.CRATES; k++) this.spawnCrate();
     for (let k = 0; k < 8; k++) this.spawnFriend();
+    this.pickGrace();
     sfx('levelup');
   }
   /** 보급 상자: 플레이어에게서 180px 이상 떨어진 곳 */
@@ -3205,7 +3209,14 @@ class Game {
       else if (mins < 1.5) kind = r < 0.45 ? 'drone' : r < 0.78 ? 'walker' : 'hound';
       else kind = r < 0.35 ? 'drone' : r < 0.62 ? 'walker' : r < 0.82 ? 'hound' : r < 0.93 ? 'tank' : 'artillery';
     }
-    this.mons.push(mkFriend(kind, Arena.cx(p.x + Math.cos(a) * Game.FRIEND_DIST, 50), Arena.cy(p.y + Math.sin(a) * Game.FRIEND_DIST, 50), this.elapsed));
+    // 벽 근처에서는 좌표가 맵 안쪽으로 밀려 내 옆에 생길 수 있으므로, 충분히 먼 방향을 찾는다
+    for (let t = 0; t < 12; t++) {
+      const ang = t === 0 ? a : rand(0, TAU);
+      const x = Arena.cx(p.x + Math.cos(ang) * Game.FRIEND_DIST, 50), y = Arena.cy(p.y + Math.sin(ang) * Game.FRIEND_DIST, 50);
+      if (this.spawnOk(x, y)) { this.mons.push(mkFriend(kind, x, y, this.elapsed)); return; }
+    }
+    const pt = this.pickSpawnPoint();
+    if (pt) this.mons.push(mkFriend(kind, pt[0], pt[1], this.elapsed));
   }
   /** 중간보스: 내 중간보스 / 워든(친구 보스) 중 랜덤. 체력은 둘이 공유하며 등장할 때마다 오른다 */
   spawnMiniboss(x, y) {
@@ -3295,6 +3306,8 @@ class Game {
   // ---- 플레이어 피격 ----
   /** 시간 강화 배율 */
   get atkMult() { return 1 + Game.ATK_PER_MIN * this.elapsed / 60; }
+  /** 아이템을 고른 직후 잠깐 무적 (다시 조작할 시간) */
+  pickGrace() { const p = this.player; if (p) p.invulnT = Math.max(p.invulnT, Game.PICK_INVULN); }
   get spawnMult() { return 1 + Game.SPAWN_PER_MIN * this.elapsed / 60; }
   hurtPlayer(dmg) {
     if (this.rescue || this.over) return;   // 구출 중에는 피해 없음
@@ -3410,6 +3423,8 @@ class Game {
   }
 
   // ---- 스폰 ----
+  /** 플레이어와 최소 거리 이상 떨어진 좌표인지 */
+  spawnOk(x, y) { const p = this.player; return dist(x, y, p.x, p.y) >= Game.SPAWN_SAFE; }
   pickSpawnPoint() {
     const p = this.player;
     for (let i = 0; i < 50; i++) {
@@ -3441,6 +3456,7 @@ class Game {
       const n = randi(2, 3);   // 몬스터 종류가 늘어난 만큼 한 무리는 2~3마리
       for (const [sx, sy] of this.spread(pt[0], pt[1], n, 26)) {
         const x = Arena.cx(sx, 1), y = Arena.cy(sy, 1);
+        if (!this.spawnOk(x, y)) continue;   // 흩뿌리다 너무 가까워진 개체는 생략
         this.mons.push(kind === 'straight' ? mkStraight(x, y, p.x, p.y, this.monsterSpeed()) : mkTracker(x, y, this.trackerSpeed(), this.elapsed));
       }
     }
@@ -3736,6 +3752,7 @@ class Game {
     else p.apply(id);
     if (lu.kind === 'levelup' && id !== 'heal' && ++this.augPicks % Game.HEAL_EVERY === 0) this.heal(this.pickHeal(), C.bandage);   // 증강 3번째마다 회복
     this.levelup = null;
+    this.pickGrace();
     FX.ring(p.x, p.y, 10, 120, 0.4, ITEM_COLORS[id], 4); FX.burst(p.x, p.y, ITEM_COLORS[id], 20, 300, 0.45, 2.4);
     sfx('pickup');
   }
@@ -3749,7 +3766,7 @@ class Game {
     const r = this.runeReveal;
     if (!r) return;
     if (r.phase !== 'shown') { r.phase = 'shown'; r.ft = Game.FLIP; r.st = 0; return; }
-    if (r.st > 0.25) { this.runeReveal = null; sfx('click'); }
+    if (r.st > 0.25) { this.runeReveal = null; this.pickGrace(); sfx('click'); }
   }
   revealDown() { const r = this.runeReveal; if (r && r.phase === 'back') { r.drag = true; r.dx0 = MOUSE.x; r.dragX = 0; } else this.revealSkipOrClose(); }
   revealMove() {
@@ -3886,7 +3903,7 @@ class Game {
         this.bruteT = 0;
         for (let k = 0; k < (this.inWave ? 2 : 1); k++) {
           const pt = this.pickSpawnPoint();
-          if (pt) this.mons.push(mkBrute(Arena.cx(pt[0], 20), Arena.cy(pt[1], 20), this.trackerSpeed(), this.elapsed));
+          if (pt && this.spawnOk(Arena.cx(pt[0], 20), Arena.cy(pt[1], 20))) this.mons.push(mkBrute(Arena.cx(pt[0], 20), Arena.cy(pt[1], 20), this.trackerSpeed(), this.elapsed));
         }
       }
     }
@@ -5159,7 +5176,7 @@ const MODES = [
   ['survival', '무한 생존', ['끝없이 몰려오는 몬스터를 버티는 기본 모드', '순위: 생존 시간이 길수록 높음'], '#5fe1ff', true],
   ['hunting', '헌팅', ['정해진 몬스터를 8웨이브에 걸쳐 전부 처치', '제한 5분'], '#ff9a2e', false],
   ['ranked', '랭킹전', ['무한 생존 규칙 + 점수 증가 버프 등장', '순위: 최종 점수가 높을수록 높음'], '#ffd84a', true],
-  ['dev', '개발자 모드', ['밸런스 조정용 테스트 맵', '랭킹 없음'], '#ff78dc', false],
+  ['soon', '준비중…', ['새로운 모드를 준비하고 있어요', '다음 업데이트를 기대해 주세요!'], '#ff78dc', false],
 ];
 const MENU_BLOBS = [[400, 300, 620, '#2a48ff'], [1500, 900, 700, '#7a2cff'], [900, 1500, 560, '#0a8cff'], [2100, 400, 640, '#ff2a8c'], [300, 1300, 520, '#7a2cff'], [1900, 1600, 600, '#2a48ff']];
 function drawMenu() {
