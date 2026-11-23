@@ -769,7 +769,7 @@ function drawItemIcon(g, id, cx, cy, s, glowOn = false) {
 // =============================================================================
 const SHIELD_R_LV2 = 78, SHIELD_R_LV3 = 105;
 const SLOW_RUNE_R = Math.floor(SHIELD_R_LV2 * 1.5);   // 117px
-const LIFESTEAL_CHANCE = 0.005;                       // 처치 시 회복 확률 (0.5%) — 어떤 무기로 처치하든 적용
+const LIFESTEAL_CHANCE = 0.003;                       // 기본 무기로 적을 때릴 때마다 회복 확률 (0.3%)
 const PULSE_RANGE = 110;
 const PULSE_MAX_KB = SHIELD_R_LV2 * 1.2;
 
@@ -777,7 +777,7 @@ const PULSE_MAX_KB = SHIELD_R_LV2 * 1.2;
 const RUNES = {
   barrier: { cat: 'def', kind: 'passive', name: '보호막', desc: '피해를 3회 막고, 깨질 때 폭발 (30 피해 + 밀쳐내기)' },
   slow: { cat: 'def', kind: 'passive', name: '둔화 오라', desc: '주변 적 이동속도 50% · 적 탄환 속도 50%' },
-  lifesteal: { cat: 'def', kind: 'passive', name: '흡혈', desc: '적 처치 시 일정 확률로 HP 2 회복' },
+  lifesteal: { cat: 'def', kind: 'passive', name: '흡혈', desc: '기본 무기로 공격할 때마다 일정 확률로 HP 2 회복' },
   invuln: { cat: 'def', kind: 'consumable', name: '이지스', desc: '5초 무적 + 이동속도 30% (2회, 쿨타임 30초)', uses: 2, cd: 30, dur: 5 },
   fire: { cat: 'atk', kind: 'passive', name: '불길', desc: '지나간 길에 8초간 불길 (0.5초당 3 피해)' },
   pulse: { cat: 'atk', kind: 'passive', name: '충격파', desc: '2초마다 2 피해 + 최대 넉백 (보스류는 절반)' },
@@ -2105,7 +2105,8 @@ class RuneSystem {
     if (b.charges <= 0) { b.broken = true; this.pendingBreak = [this.player.x, this.player.y]; }
     return true;
   }
-  onKill(g, x, y) {
+  /** 흡혈: 기본 무기가 적에게 피해를 줄 때마다 (적 하나당 1회) 확률로 발동 */
+  onHit(g, x, y) {
     if (!this.get('lifesteal') || Math.random() >= LIFESTEAL_CHANCE) return;
     const p = this.player, before = p.hp;
     p.hp = Math.min(p.maxHp, p.hp + 2);
@@ -3508,12 +3509,14 @@ class Game {
     const mons = this.mons;
     for (const m of mons) m._t0 = m.hp;
     fn();
+    const rs = this.player.runes, lifesteal = id === this.player.basicId && rs.get('lifesteal');
     let sum = 0;
     for (const m of mons) {
       const raw = m._t0 - m.hp;
       if (!(raw > 0)) continue;
       if (mult > 1) m.hp -= raw * (mult - 1);
       if (m.kind !== 'crate') sum += Math.min(Math.max(0, m._t0), raw * mult);
+      if (lifesteal && m.kind !== 'crate') rs.onHit(this, m.x, m.y);
     }
     this.addDmg(id, sum);
   }
@@ -3528,9 +3531,8 @@ class Game {
     if (this.orbs.length >= Game.MAX_ORBS) { this.orbs[randi(0, this.orbs.length - 1)].v += v; return; }
     this.orbs.push({ x, y, v, magnet: false, ph: rand(0, TAU) });
   }
-  /** 확률에 따라 자석/붕대를 떨어뜨린다. 흡혈 룬석이 있으면 확률적으로 회복 */
+  /** 확률에 따라 자석/붕대를 떨어뜨린다 */
   onMonsterKilled(x, y, bandageOnly = false) {
-    this.player.runes.onKill(this, x, y);
     const roll = Math.random();
     if (bandageOnly) { if (roll < Game.BANDAGE_CHANCE) this.drops.push({ kind: 'bandage', x, y, age: 0 }); return; }
     if (roll < Game.MAGNET_CHANCE) this.drops.push({ kind: 'magnet', x, y, age: 0 });
@@ -3577,7 +3579,6 @@ class Game {
       case 'boss':
         this.score += Math.round(BOSS.SCORE * p.scoreMult);
         for (let i = 0; i < 10; i++) this.addOrb(m.x + rand(-40, 40), m.y + rand(-40, 40));
-        p.runes.onKill(this, m.x, m.y);
         this.spawnChestAt(m.x, m.y, 'boss');   // 확정 드롭: 보물상자 + 붕대 + 자석
         this.drops.push({ kind: 'bandage', x: m.x - 45, y: m.y + 30, age: 0 }, { kind: 'magnet', x: m.x + 45, y: m.y + 30, age: 0 });
         this.huntDone(m);
