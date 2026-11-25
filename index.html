@@ -3122,7 +3122,7 @@ class Game {
   static MIN_DIST = 600;           // 스폰 시 플레이어와의 최소 거리
   static SPAWN_SAFE = 420;         // 어떤 몬스터든 (흩뿌림·벽 보정·보스 소환 포함) 플레이어 이 거리 안에서는 생기지 않음
   static PICK_INVULN = 0.2;        // 아이템(무기·증강·융합·룬석)을 고른 직후 무적 시간 (초)
-  static WAVE_CYCLE = 60;          // 웨이브 발생 주기
+  static WAVE_CYCLE = 90;          // 웨이브 발생 주기 (웨이브마다 보스 1마리 → 보스 주기 = 90 + 30초)
   static WAVE_DURATION = 30;       // 웨이브 지속 시간
   static WARN_DURATION = 3;
   static MINIBOSS_INTERVAL = 30;   // 중간보스 등장 주기 (보스가 있으면 나오지 않음)
@@ -3147,6 +3147,7 @@ class Game {
   static EARLY_TIME = 120; static EARLY_DMG = 0.75;   // 초반 완화: 2분 전까지 받는 피해 3/4
   static ATK_PER_MIN = 0.15;        // 시간 강화: 1분마다 몬스터 공격력 +15% (상한 없음)
   static SPAWN_PER_MIN = 0.12;      // 시간 강화: 1분마다 스폰율 +12% (상한 없음)
+  static EARLY_SPAWN_TIME = 60; static EARLY_SPAWN = 0.75;   // 초반 완화: 1분 전까지 일반 몬스터 스폰율 3/4
   static CRATE_XP_CHANCE = 0.8; static CRATE_XP = 30;   // 보급 상자 80%는 '꽝' = 경험치 30
   static HEAL_EVERY = 3;            // 증강을 3번 고를 때마다 회복
   static HEAL_CARD_LV = 10;         // 슬롯이 다 찬 뒤 10레벨마다 회복 카드
@@ -3891,7 +3892,7 @@ class Game {
 
     // ── 일반 몬스터 스폰 ──
     this.spawnT += dt;
-    const sm = this.spawnMult;   // 시간이 지날수록 더 자주
+    const sm = this.spawnMult * (this.elapsed < Game.EARLY_SPAWN_TIME ? Game.EARLY_SPAWN : 1);   // 시간이 지날수록 더 자주 (1분 전에는 3/4)
     if (this.spawnT >= Game.SPAWN_INTERVAL / sm) { this.spawnT = 0; this.spawnGroups('straight'); }
     this.trackerT += dt;
     if (this.trackerT >= Game.TRACKER_INTERVAL / sm) { this.trackerT = 0; this.spawnGroups('tracker'); }
