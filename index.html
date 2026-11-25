@@ -522,10 +522,7 @@ function joyStart(id, x, y) { Object.assign(JOY, { id, ox: x, oy: y, x, y, vx: 0
 function joyMove(x, y) {
   const R = joyR();
   let dx = x - JOY.ox, dy = y - JOY.oy, d = Math.hypot(dx, dy);
-  if (d > R) {   // 손가락이 멀리 가면 조이스틱 중심이 따라옴
-    JOY.ox = x - dx / d * R; JOY.oy = y - dy / d * R;
-    dx = x - JOY.ox; dy = y - JOY.oy; d = R;
-  }
+  if (d > R) { dx = dx / d * R; dy = dy / d * R; d = R; }   // 중심은 처음 누른 곳에 고정, 손잡이만 테두리까지
   JOY.x = x; JOY.y = y; JOY.mag = d / R;
   JOY.vx = d > 0 ? dx / d : 0; JOY.vy = d > 0 ? dy / d : 0;
 }
@@ -4624,19 +4621,38 @@ function drawHUD(g) {
   drawMinimap(g);
   drawRuneSlots(g);
 
-  // 자동/수동 조준 스위치 [조준 키] — 모바일은 크게
-  const mob = SET.mobile, aw = mob ? 176 : 160, ah = mob ? 40 : 30, ax = 16, ay = VH - 16 - ah;   // 미니맵이 위로 가서 왼쪽 아래 구석으로
-  const hov = hot(ax, ay, aw, ah, () => { g.autoAim = !g.autoAim; });
-  rr(ctx, ax, ay, aw, ah, 8); ctx.fillStyle = hov && !mob ? 'rgba(40,60,110,0.85)' : 'rgba(8,12,26,0.8)'; ctx.fill();
-  ctx.strokeStyle = g.autoAim ? '#2fd07a' : 'rgba(120,150,220,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
-  const sy = ay + ah / 2;
-  rr(ctx, ax + 8, sy - 8, 34, 16, 8); ctx.fillStyle = g.autoAim ? '#2fd07a' : '#3a4460'; ctx.fill();
-  ctx.beginPath(); ctx.arc(g.autoAim ? ax + 34 : ax + 16, sy, 6, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
-  txt(ctx, g.autoAim ? '자동 조준' : (mob ? '이동 방향 조준' : '수동 조준'), ax + 50, sy + 1, 13, g.autoAim ? '#9df0c0' : C.gray, 'left', 700);
-  if (!mob) txt(ctx, kn('aim'), ax + aw - 12, sy + 1, 12, C.dim, 'right', 700);
+  // 자동/수동 조준 스위치
+  //  PC: 왼쪽 아래 구석 [조준 키]
+  //  모바일: 위쪽 일시정지 버튼 바로 오른쪽 — 왼손 조이스틱 자리에서 잘못 눌리지 않게
+  if (SET.mobile) {
+    if (!g.over && !g.rescue) {
+      const s = 50 * SET.btnScale, ax = VW / 2 + 96 + s + 12, ay = 12, on = g.autoAim, cx = ax + s / 2, cy = ay + s * 0.4;
+      hot(ax, ay, s, s, () => { g.autoAim = !g.autoAim; });
+      ctx.globalAlpha = Math.max(0.5, SET.btnAlpha);
+      rr(ctx, ax, ay, s, s, 12); ctx.fillStyle = 'rgba(8,12,26,0.85)'; ctx.fill();
+      ctx.strokeStyle = on ? '#2fd07a' : 'rgba(150,180,240,0.7)'; ctx.lineWidth = 1.5; ctx.stroke();
+      const col = on ? '#9df0c0' : '#c6d2ee', r = s * 0.17;   // 조준경 아이콘
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - r * 1.6, cy); ctx.lineTo(cx - r * 0.5, cy); ctx.moveTo(cx + r * 0.5, cy); ctx.lineTo(cx + r * 1.6, cy);
+      ctx.moveTo(cx, cy - r * 1.6); ctx.lineTo(cx, cy - r * 0.5); ctx.moveTo(cx, cy + r * 0.5); ctx.lineTo(cx, cy + r * 1.6); ctx.stroke();
+      txt(ctx, on ? '자동' : '수동', cx, ay + s * 0.82, 11 * SET.btnScale, col, 'center', 800);
+      ctx.globalAlpha = 1;
+    }
+  } else {
+    const aw = 160, ah = 30, ax = 16, ay = VH - 16 - ah;
+    const hov = hot(ax, ay, aw, ah, () => { g.autoAim = !g.autoAim; });
+    rr(ctx, ax, ay, aw, ah, 8); ctx.fillStyle = hov ? 'rgba(40,60,110,0.85)' : 'rgba(8,12,26,0.8)'; ctx.fill();
+    ctx.strokeStyle = g.autoAim ? '#2fd07a' : 'rgba(120,150,220,0.4)'; ctx.lineWidth = 1.5; ctx.stroke();
+    const sy = ay + ah / 2;
+    rr(ctx, ax + 8, sy - 8, 34, 16, 8); ctx.fillStyle = g.autoAim ? '#2fd07a' : '#3a4460'; ctx.fill();
+    ctx.beginPath(); ctx.arc(g.autoAim ? ax + 34 : ax + 16, sy, 6, 0, TAU); ctx.fillStyle = '#fff'; ctx.fill();
+    txt(ctx, g.autoAim ? '자동 조준' : '수동 조준', ax + 50, sy + 1, 13, g.autoAim ? '#9df0c0' : C.gray, 'left', 700);
+    txt(ctx, kn('aim'), ax + aw - 12, sy + 1, 12, C.dim, 'right', 700);
+  }
 
   // 모바일: 일시정지 버튼 (위쪽 가운데 시간 옆)
-  if (mob && !g.over && !g.rescue) {
+  if (SET.mobile && !g.over && !g.rescue) {
     const s = 50 * SET.btnScale, px = VW / 2 + 96, py = 12;
     hot(px, py, s, s, () => { g.paused = true; joyEnd(); });
     ctx.globalAlpha = Math.max(0.5, SET.btnAlpha);
@@ -5078,7 +5094,7 @@ function drawPause(g) {
   button(60, 260, 252, 48, '메인 메뉴', () => App.toMenu());
   txt(ctx, '설정', 62, 344, 14, C.gray, 'left', 800);
   settingRows(56, 360, 260, true);
-  const hints = SET.mobile ? ['화면을 끌어 이동  ·  조준 스위치 터치', '룬석 슬롯 터치: 바로 사용', '계속하기를 눌러 돌아가기']
+  const hints = SET.mobile ? ['화면을 끌어 이동  ·  위쪽 조준 버튼 터치', '룬석 슬롯 터치: 바로 사용', '계속하기를 눌러 돌아가기']
     : [`${kn('up')}${kn('left')}${kn('down')}${kn('right')} 이동  ·  ${kn('aim')} 조준 전환`, `${kn('rune1')}~${kn('rune5')} · 휠 룬석 선택  ·  우클릭/${kn('use')} 사용`, `${kn('pause')} 계속하기  ·  ${kn('mute')} 소리 끄기`];
   hints.forEach((h, i) => txt(ctx, h, 186, 590 + i * 20, 12, C.dim, 'center', 600));
 
@@ -5257,7 +5273,7 @@ function drawMenuBody(t) {
 
   panel(ctx, 456, py, pw, ph, '#6fa8ff', 0.86);
   txt(ctx, '조작법', 476, py + 24, 15, C.gray, 'left', 800);
-  (SET.mobile ? [['화면 끌기', '이동 (누른 곳에 조이스틱)'], ['조준 스위치', '자동 / 이동 방향 조준'], ['룬석 슬롯', '누르면 바로 사용'], ['II 버튼', '일시정지'], ['카드 · 버튼', '눌러서 고르기'], ['설정', '키 · 버튼 설정에서 크기 조절']]
+  (SET.mobile ? [['화면 끌기', '이동 (누른 곳에 조이스틱 고정)'], ['조준 버튼 (위쪽)', '자동 / 이동 방향 조준'], ['룬석 슬롯', '누르면 바로 사용'], ['II 버튼', '일시정지'], ['카드 · 버튼', '눌러서 고르기'], ['설정', '키 · 버튼 설정에서 크기 조절']]
     : [[`${kn('up')} ${kn('left')} ${kn('down')} ${kn('right')}`, '이동'], [kn('aim'), '자동 / 수동 조준 전환'], [`${kn('rune1')} ~ ${kn('rune5')} · 휠`, '룬석 슬롯 선택'], [`우클릭 · ${kn('use')}`, '선택한 룬석 사용'], [kn('pause'), '일시정지'], [kn('mute'), '효과음 켜기 / 끄기']]).forEach(([k, v], i) => {
     const y = py + 58 + i * 27;
     txt(ctx, k, 478, y, 14, '#5fe1ff', 'left', 800); txt(ctx, v, 610, y, 14, '#c6d2ee', 'left', 600);
