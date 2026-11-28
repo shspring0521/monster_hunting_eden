@@ -85,7 +85,7 @@ function saveJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } ca
 // flash : 화면 번쩍임 (광과민성 배려)   shake : 화면 흔들림 + 히트스톱
 // sound : 효과음                      bloom : 빛 번짐 (끄면 가벼워짐)
 // fxAlpha : 내 공격 효과의 진하기 (낮출수록 투명해져서 적 탄이 잘 보임)
-const SET = Object.assign({ flash: true, shake: true, sound: true, bloom: true, fxAlpha: 0.6, mobile: false, btnScale: 1, btnAlpha: 0.6 }, loadJSON('mh_settings', {}));
+const SET = Object.assign({ flash: true, shake: true, sound: true, bloom: true, fxAlpha: 0.6, mobile: false, btnScale: 1, btnAlpha: 0.6, focus: false }, loadJSON('mh_settings', {}));
 const FX_ALPHAS = [1, 0.8, 0.6, 0.4];
 const saveSettings = () => saveJSON('mh_settings', SET);
 
@@ -646,7 +646,17 @@ function itemDesc(id, curLv, player) {
   if (ITEMS[id].type === 'skill') {
     const sk = new SKILLS[id]();
     sk.level = Math.min(n, ITEMS[id].max);
-    return sk.lines();
+    const out = sk.lines();
+    if (n >= 2 && n <= ITEMS[id].max) {   // 이전 레벨과 비교해 크기·사거리·속도가 늘었는지만 짧게 표시
+      const pv = new SKILLS[id](); pv.level = n - 1;
+      const up = keys => keys.some(k => typeof sk[k] === 'number' && typeof pv[k] === 'number' && sk[k] > pv[k] + 1e-6);
+      const ups = [];
+      if (up(['radius', 'blastR', 'width', 'maxR', 'reach', 'zoneR', 'angle'])) ups.push('범위 증가');
+      if (up(['maxRange', 'maxDist', 'range', 'orbit'])) ups.push('사거리 증가');
+      if (typeof sk.interval === 'number' && typeof pv.interval === 'number' && sk.interval < pv.interval - 1e-6) ups.push(SKILLS[id].SPEED_LABEL || '공격 속도 증가');
+      if (ups.length) out.push(ups.join(' · '));
+    }
+    return out;
   }
   switch (id) {
     case 'atk_up': return [`공격력 +${n * 10}%`, '(기본 무기 · 자석 구체 · 지뢰)'];
@@ -871,7 +881,7 @@ class Shield extends Skill {
   get radius() { return Math.floor(grow(50, 105, this.L) * Shield.SIZE_MULT * this.area); }
   static GROWTH = 2 / 3;   // 레벨당 피해 증가폭은 원래의 2/3 (Lv1 3은 그대로, Lv5 6.25 → 5.17)
   get damage() { return 3 + (grow(3, 5, this.L) - 3) * Shield.GROWTH; }
-  lines() { return [`범위 ${this.radius}px`, `${this.interval.toFixed(2)}초마다 ${n1(this.damage)} 피해`, '항상 작동하는 오라']; }
+  lines() { return ['주변 적에게 지속 피해', `${n1(this.damage)} 피해`]; }
   update(dt, g) {
     this.t += dt; this.hitPulse = Math.max(0, this.hitPulse - dt * 5);
     if (this.t >= this.interval) {
@@ -909,7 +919,8 @@ class Missile extends Skill {
   get damage() { return grow(2, 4, this.L); }
   get dot() { return grow(1, 3, this.L); }
   get interval() { return 1 / this.rate; }
-  lines() { return [`초당 ${n1(this.rate)}발 · 폭발 ${this.blastR}px`, `폭발 ${n1(this.damage)} 피해`, `장판 0.1초당 ${n1(this.dot)} (2초)`]; }
+  static SPEED_LABEL = '폭격량 증가';
+  lines() { return ['미사일 폭격 실행', `폭발 ${n1(this.damage)} 피해`, '폭발 자리에 불 장판 생성']; }
   update(dt, g) {
     this.t += dt;
     while (this.t >= this.interval) {
@@ -1050,7 +1061,7 @@ class Laser extends Skill {
   get damage() { return grow(5, 9, this.L); }
   get width() { return Laser.BASE_WIDTH * this.area; }
   get interval() { return growDown(1.2, 0.72, this.L) * this.cd; }
-  lines() { return [`반사 ${this.bounces}회 · ${n1(this.damage)} 피해`, `쿨타임 ${this.interval.toFixed(2)}초`, '적을 관통']; }
+  lines() { return ['적을 관통하는 레이저', `${n1(this.damage)} 피해 · 반사 ${this.bounces}회`]; }
   update(dt, g) {
     this.t += dt;
     if (this.t >= this.interval) {
@@ -1076,7 +1087,7 @@ class Rifle extends Skill {
   get interval() { return growDown(0.3, 0.1, this.L) * this.cd; }
   get damage() { return grow(2, 4, this.L); }
   get maxRange() { return Math.round(grow(300, 450, this.L)) + this.rangeBonus; }
-  lines() { return [`${this.interval.toFixed(3)}초마다 발사`, `${n1(this.damage)} 피해`, `사거리 ${this.maxRange}px`]; }
+  lines() { return ['가까운 적에게 연사', `${n1(this.damage)} 피해`]; }
   get bulletR() { return 5 * this.area; }
   update(dt, g) {
     this.t += dt;
@@ -1162,7 +1173,7 @@ class Grenade extends Skill {
   get count() { return this.L; }   // 수류탄 개수 = 레벨
   get radius() { return Math.floor(grow(50, 110, this.L) * Grenade.RADIUS_MULT * this.area); }
   get blast() { return grow(3, 7, this.L) * 2; }
-  lines() { return [`수류탄 ${this.count}개 · 폭발 범위 ${this.radius}px`, `폭발 피해 ${n1(this.blast)} · 넉백 · 0.4초 감속 15%`, `${this.interval.toFixed(1)}초마다 투척`]; }
+  lines() { return [`주변에 수류탄 ${this.count}개 투척`, `폭발 ${n1(this.blast)} 피해`, '넉백']; }
   positions(p) {   // Lv1=위, Lv2=위/아래, Lv3~=정다각형
     const r = this.radius, n = this.count;
     if (n === 1) return [[p.x, p.y - r]];
@@ -1280,7 +1291,7 @@ class Cannon extends BasicWeapon {
   get blastR() { return Math.round(this.maxDist * Cannon.BLAST_RANGE); }
   get blastAngle() { return 110 + 5 * (this.L - 1); }
   get boomDmg() { return Math.round(this.damage * Cannon.BOOM_DMG); }
-  lines() { return [`포환 ${this.damage} · 사거리 ${this.maxDist}px · 끝 폭발 ${this.boomDmg}`, `발사 충격파 ${this.blastDmg} · ${this.blastR}px · ${this.blastAngle}°`, `포환 지름 ${(this.radius * 2).toFixed(0)}px · ${this.interval.toFixed(2)}초마다`]; }
+  lines() { return [`관통 포환 ${this.damage} 피해`, `끝에서 폭발 ${this.boomDmg} 피해`, `발사 충격파 ${this.blastDmg} 피해 + 밀쳐냄`]; }
   fire(g) {
     const p = g.player, a = rad(p.face);
     this.balls.push({ x: p.x, y: p.y, dx: Math.cos(a), dy: Math.sin(a), r: this.radius, dmg: this.damage, boom: this.boomDmg, max: this.maxDist, trav: 0, hit: new Set() });
@@ -1444,7 +1455,7 @@ class Sword extends BasicWeapon {
   constructor() { super(1); this.qis = []; this.swings = []; }
   get maxR() { return this.baseRange * Sword.rangeMult(this.L) + this.rangeBonus; }
   get count() { return Math.round(grow(4, 6, this.L)); }
-  lines() { return [`검기 ${this.count}개 · 피해 ${this.damage}`, `범위 ${this.maxR.toFixed(0)}px · 각도 ${this.angle}°`, `${this.interval.toFixed(2)}초마다 · 적 탄 베어냄`]; }
+  lines() { return [`검기 ${this.count}개 · ${this.damage} 피해`, '적 탄을 베어냄']; }
   get thick() { return this.maxR / 5; }
   fire(g) {
     const p = g.player, n = this.count, ang = this.angle, lo = p.face - ang / 2;
@@ -1539,7 +1550,7 @@ class Claw extends BasicWeapon {
   static mult(L) { return grow(2 / 3, 1.5, L); }
   constructor() { super(2); this.swipes = []; }
   get reach() { return this.baseRange + this.rangeBonus; }
-  lines() { return [`손톱 4줄 · 줄마다 피해 ${this.damage}`, `범위 ${this.reach}px · 각도 ${this.angle}°`, `${this.interval.toFixed(2)}초마다 할퀴기`]; }
+  lines() { return ['손톱 4줄로 할퀴기', `줄마다 ${this.damage} 피해`]; }
   fire(g) {
     this.swipes.push(new ClawSwipe(g.player.face, this.angle, this.reach, this.damage, this.swing));
     g.player.recoil = 1;
@@ -1563,7 +1574,7 @@ class Orb extends Skill {
   get damage() { return Orb.DMG * this.atk; }
   get tick() { return Orb.TICK * this.cd; }
   get revTime() { return 1.25 * this.cd; }   // 회전 속도는 원래의 80%
-  lines() { return [`구체 ${this.count}개 · ${this.revTime.toFixed(2)}초에 1바퀴`, `닿으면 ${this.tick.toFixed(2)}초마다 ${n1(this.damage)} 피해`, '넉백 + 적 탄 막기']; }
+  lines() { return [`주위를 도는 구체 ${this.count}개`, `닿으면 ${n1(this.damage)} 피해 + 넉백`, '적 탄을 막음']; }
   positions(p) {
     const n = this.count, o = this.orbit;
     return Array.from({ length: n }, (_, i) => [p.x + Math.cos(this.phase + TAU * i / n) * o, p.y + Math.sin(this.phase + TAU * i / n) * o]);
@@ -1614,8 +1625,8 @@ class Mine extends Skill {
   get zoneR() { return Math.floor(Shield.RADII[2] * FUSION_MULT * this.area); }
   get zoneDmg() { return 5 * FUSION_MULT; }
   lines() {
-    if (this.field) return [`지뢰 폭발 ${n1(this.damage)} · ${this.radius}px`, `터진 자리에 장판 ${this.zoneR}px`, `0.16초마다 ${n1(this.zoneDmg)} · 3초`];
-    return [`${this.interval.toFixed(1)}초마다 매설 · 폭발 ${n1(this.damage)}`, `범위 ${this.radius}px · 넉백`, '1초간 이동속도 -1'];
+    if (this.field) return [`지뢰 폭발 ${n1(this.damage)} 피해`, `터진 자리에 피해 장판 (${n1(this.zoneDmg)})`];
+    return ['주변에 지뢰 매설', `폭발 ${n1(this.damage)} 피해`, '넉백'];
   }
   get interval() { return Mine.INTERVAL * this.cd; }
   explode(x, y, g) {
@@ -1689,7 +1700,7 @@ class Boundary extends Skill {
   get damage() { return Orb.DMG * FUSION_MULT * this.atk * Boundary.DMG_MULT; }
   get tick() { return Orb.TICK / FUSION_MULT; }        // 이미 빨라서 공격 속도 증가 영향을 받지 않음
   get revTime() { return 0.5 / FUSION_MULT; }
-  lines() { return [`반지름 ${this.radius.toFixed(0)}px · ${this.revTime.toFixed(2)}초에 1바퀴`, `선에 닿으면 ${n1(this.damage)} 피해 + 넉백`, '안쪽 적 이속 -1 · 적 탄 막기']; }
+  lines() { return ['주위를 도는 경계선', `닿으면 ${n1(this.damage)} 피해 + 넉백`, '안쪽 적 감속 · 적 탄 막기']; }
   get arcSpan() { return deg(Boundary.ARC_LEN / this.radius); }
   centers() { const b = deg(this.phase); return Array.from({ length: Boundary.ARCS }, (_, i) => b + 360 * i / Boundary.ARCS); }
   update(dt, g) {
@@ -1739,7 +1750,7 @@ class MegaLaser extends Skill {
   get damage() { return 4 * FUSION_MULT; }
   get width() { return Laser.BASE_WIDTH * this.area / 2 * FUSION_MULT; }
   get bounces() { return Math.round(3 * FUSION_MULT); }
-  lines() { return [`${this.interval.toFixed(2)}초마다 관통 레이저`, `피해 ${n1(this.damage)} · 반사 ${this.bounces}회`, `인식 사거리 ${this.maxRange}px`]; }
+  lines() { return ['굵은 관통 레이저', `${n1(this.damage)} 피해 · 반사 ${this.bounces}회`]; }
   update(dt, g) {
     this.t += dt;
     if (this.t >= this.interval) {
@@ -1766,7 +1777,7 @@ class Meteor extends Skill {
   get radius() { return Math.floor(110 * FUSION_MULT * this.area); }
   get blast() { return 7 * FUSION_MULT; }
   get dot() { return 3 * FUSION_MULT; }
-  lines() { return [`초당 ${n1(1 / this.interval)}개 수류탄 낙하`, `폭발 ${n1(this.blast)} · 장판 0.3초당 ${n1(this.dot)}`, `범위 ${this.radius}px · 3초 유지`]; }
+  lines() { return ['메테오 실행', `폭발 ${n1(this.blast)} 피해`, '떨어진 자리에 불 장판 생성']; }
   update(dt, g) {
     this.t += dt;
     while (this.t >= this.interval) {
@@ -1849,7 +1860,7 @@ class Plasma extends Gun {
   get damage() { return 6 + 1.5 * (this.L - 1); }                     // 6 → 12
   get pierce() { return 2 + this.L; }
   get range() { return 700 + this.rangeBonus; }
-  lines() { return [`관통 탄 ${this.count}발 · ${n1(this.damage)} 피해`, `적 ${this.pierce}마리까지 관통`, `${this.interval.toFixed(2)}초마다 · 사거리 ${this.range}px`]; }
+  lines() { return [`관통 탄 ${this.count}발 · ${n1(this.damage)} 피해`, `적 ${this.pierce}마리까지 관통`]; }
   update(dt, g) {
     this.t += dt;
     const p = g.player;
@@ -1872,7 +1883,7 @@ class Vulcan extends Gun {
   get count() { return [1, 1, 2, 2, 3][this.L - 1]; }
   get damage() { return 2 + 0.5 * (this.L - 1); }                     // 2 → 4
   get range() { return 600 + this.rangeBonus; }
-  lines() { return [`${this.interval.toFixed(3)}초마다 ${this.count}발`, `${n1(this.damage)} 피해 · 약한 넉백`, `사거리 ${this.range}px` + (this.L >= 5 ? ' · 2마리 관통' : '')]; }
+  lines() { return [`한 번에 ${this.count}발 흩뿌리기`, `${n1(this.damage)} 피해` + (this.L >= 5 ? ' · 2마리 관통' : '')]; }
   update(dt, g) {
     this.t += dt;
     const p = g.player;
@@ -1896,7 +1907,7 @@ class Lightning extends Skill {
   get targets() { return (this.L + 1) * 2; }          // 낙뢰 수 2배: 4 → 12마리
   get damage() { return (6 + (this.L - 1)) * 1.5; }   // 피해 1.5배: 9 → 15
   get range() { return Math.round(620 * 1.15) + this.rangeBonus; }   // 범위 1.15배: 620 → 713px
-  lines() { return [`${this.interval.toFixed(2)}초마다 낙뢰`, `주변 적 ${this.targets}마리 · ${n1(this.damage)} 피해`, `범위 ${this.range}px`]; }
+  lines() { return [`주변 적 ${this.targets}마리에 낙뢰`, `${n1(this.damage)} 피해`]; }
   update(dt, g) {
     this.t += dt;
     const p = g.player;
@@ -1930,7 +1941,7 @@ class Homing extends Skill {
   get count() { return Math.round(this.L * Homing.COUNT_MULT); }
   get damage() { return 8 + 2 * (this.L - 1); }   // 8 → 16
   get blastR() { return Math.round(20 * this.area); }   // 폭발 범위 = 미사일 1레벨 범위 (20px)
-  lines() { return [`${this.interval.toFixed(1)}초마다 유도탄 ${this.count}발`, `한 발 ${n1(this.damage)} 피해 · 폭발 ${this.blastR}px`, '보스·중간보스 우선 · 1.2배 피해']; }
+  lines() { return [`유도탄 ${this.count}발 · ${n1(this.damage)} 피해`, '보스류 우선 · 1.2배 피해']; }
   pick(g, p) {
     const list = g.mons.filter(m => m.kind !== 'crate' && m.hp > 0);
     list.sort((a, b) => (b.tier - a.tier) || (dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y)));
@@ -3241,7 +3252,7 @@ class Game {
     FX.burst(p.x, p.y, '#ff6a5a', 50, 650, 0.6, 3);
     if (SET.flash) this.flashT = Game.FLASH_DUR * 0.4;
     FX.shake(0.8); FX.stop(0.08); sfx('nova');
-    this.banner('EMP 충격파!', '#ff4757');
+    if (!SET.focus) this.banner('EMP 충격파!', '#ff4757');   // 전투 집중: 알림 없음
   }
 
   // ---- 조회 헬퍼 ----
@@ -3489,7 +3500,7 @@ class Game {
     this.huntCards = this.huntCards.filter((c, i) => i === 0 || c.m !== m);   // 아직 안 뜬 등장 전단은 생략
     const cur = this.huntCards[0];
     if (cur && cur.m === m && !cur.done) cur.age = Math.max(cur.age, Game.HUNT_CARD_DUR - 0.32);   // 떠 있는 등장 전단은 바로 내려감
-    this.pushHuntCard(m, true);
+    if (!SET.focus) this.pushHuntCard(m, true);   // 전투 집중: '사냥 완료' 전단 생략
   }
   pushHuntCard(m, done) {
     this.huntCards.push({ m, key: monKey(m), col: m.col || MON[m.kind].col, ...m.hunt, hp: m.maxHp, boss: m.tier === 2, done, age: 0 });
@@ -3523,6 +3534,12 @@ class Game {
     return Object.entries(this.dmg).map(([id, v]) => [id, v, v / Math.max(1, this.elapsed - this.dmgFirst[id])]).sort((a, b) => b[1] - a[1]);
   }
   banner(text, col) { this.banners.push({ text, col, age: 0 }); if (this.banners.length > 4) this.banners.shift(); }
+  /** 줍는 아이템 알림: 전투 집중이면 흡혈처럼 머리 위에 작게, 아니면 위쪽 배너 */
+  pickNote(text, small, col) {
+    if (!SET.focus) { this.banner(text, col); return; }
+    const p = this.player;
+    this.popups.push({ x: p.x, y: p.y - p.r - 40, amt: 0, text: small, col, tier: 3, age: 0, dur: 1.1, pop: 14, fade: 0.55, heal: true, big: true });
+  }
 
   // ---- 처치 보상 ----
   addOrb(x, y, v = Game.XP_VALUE) {
@@ -3988,9 +4005,9 @@ class Game {
     this.drops = this.drops.filter(it => {
       it.age += dt;
       if (dist(it.x, it.y, p.x, p.y) >= Game.DROP_PICKUP) return true;
-      if (it.kind === 'magnet') { for (const o of this.orbs) o.magnet = true; this.banner('자석!', '#78d2ff'); FX.ring(p.x, p.y, 20, 500, 0.6, '#78d2ff', 3); }
+      if (it.kind === 'magnet') { for (const o of this.orbs) o.magnet = true; this.pickNote('자석!', '자석', '#78d2ff'); FX.ring(p.x, p.y, 20, 500, 0.6, '#78d2ff', 3); }
       else if (it.kind === 'emp') this.emp();
-      else { p.hp = Math.min(p.maxHp, p.hp + Game.BANDAGE_HEAL); this.prevHp = p.hp; this.banner(`붕대! HP +${Game.BANDAGE_HEAL}`, C.bandage); FX.burst(p.x, p.y, C.bandage, 24, 260, 0.6, 2.6); }
+      else { const before = p.hp; p.hp = Math.min(p.maxHp, p.hp + Game.BANDAGE_HEAL); this.prevHp = p.hp; this.pickNote(`붕대! HP +${Game.BANDAGE_HEAL}`, `붕대 +${Math.round(p.hp - before)}`, C.bandage); FX.burst(p.x, p.y, C.bandage, 24, 260, 0.6, 2.6); }
       sfx('pickup');
       return false;
     });
@@ -4514,7 +4531,10 @@ function settingRows(x, y, w, withFullscreen) {
   rr(ctx, x, fy, w, 26, 8); ctx.fillStyle = hov ? 'rgba(90,140,255,0.16)' : 'rgba(255,255,255,0.04)'; ctx.fill();
   txt(ctx, '내 공격 효과 진하기', x + 12, fy + 14, 14, hov ? '#fff' : '#c6d2ee', 'left', 600);
   txt(ctx, Math.round(SET.fxAlpha * 100) + '%', x + w - 14, fy + 14, 14, '#5fe1ff', 'right', 800);
-  if (withFullscreen) toggleRow(x, fy + S, w, '전체 화면', !!document.fullscreenElement, toggleFullscreen);
+  // [전체 화면] [전투 집중] — 전투 집중: 붕대·자석·EMP 알림과 현상수배 전단을 작게 (끄면 기존과 같음)
+  const fw = withFullscreen ? (w - 8) / 2 : w, fx0 = withFullscreen ? x + fw + 8 : x;
+  if (withFullscreen) toggleRow(x, fy + S, fw, '전체 화면', !!document.fullscreenElement, toggleFullscreen);
+  toggleRow(fx0, fy + S, fw, '전투 집중', SET.focus, () => { SET.focus = !SET.focus; saveSettings(); });
   // 마지막 줄: [조작: PC / 모바일] [키 설정]
   const ly = fy + S * 2, hw = (w - 8) / 2;
   const h1 = hot(x, ly, hw, 26, () => setMobile(!SET.mobile));
@@ -4680,6 +4700,7 @@ const easeOutBack = u => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * (u -
 function drawHuntCard(g) {
   const c = g.huntCards[0];
   if (!c) return;
+  if (SET.focus) { if (!c.done) drawHuntMini(c); return; }   // 전투 집중: 초상 + 이름만 작게 (처치 도장은 생략)
   const dur = c.done ? Game.HUNT_DONE_DUR : Game.HUNT_CARD_DUR, t = c.age, IN = 0.42, OUT = 0.32;
   const k = t < IN ? easeOutBack(t / IN) : t > dur - OUT ? 1 - ((t - (dur - OUT)) / OUT) ** 2 : 1;
   const W = 560, H = 136, rest = VH - 214;
@@ -4734,6 +4755,29 @@ function drawHuntCard(g) {
       ctx.restore();
     }
   }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/** 전투 집중용 작은 수배 표시 (기존 전단의 1/4 크기): 몬스터 그림 + 이름 */
+function drawHuntMini(c) {
+  const dur = Game.HUNT_CARD_DUR, t = c.age, IN = 0.2, OUT = 0.3;
+  const k = t < IN ? t / IN : t > dur - OUT ? 1 - (t - (dur - OUT)) / OUT : 1;
+  const H = 34, ps = 26;
+  const nw = textW(ctx, c.name, 14, 900), W = ps + nw + 24;   // 이름 길이에 맞춤 (기존 전단 면적의 1/4 이하)
+  const x = VW / 2 - W / 2, y = VH - 214 + 60 + (1 - k) * 16;
+  ctx.save();
+  ctx.globalAlpha = clamp(k, 0, 1);
+  rr(ctx, x, y, W, H, 8); ctx.fillStyle = 'rgba(10,8,18,0.85)'; ctx.fill();
+  ctx.strokeStyle = rgba(HUNT_RED, 0.8); ctx.lineWidth = 1.5; ctx.stroke();
+  const px = x + 4, py = y + 4;
+  ctx.save(); rr(ctx, px, py, ps, ps, 6); ctx.clip();
+  ctx.fillStyle = 'rgba(30,10,24,0.95)'; ctx.fillRect(px, py, ps, ps);
+  const base = c.key.startsWith('warden') ? 'warden' : c.key, sc = 10 / MON[base].r;
+  drawSpr(monSpr(c.key), px + ps / 2, py + ps / 2, 0, sc);
+  if (c.key === 'boss') drawSpr(bossFaceSpr(), px + ps / 2, py + ps / 2, 0, sc);
+  ctx.restore();
+  txt(ctx, c.name, px + ps + 8, y + H / 2 + 1, 14, c.col, 'left', 900);
   ctx.restore();
   ctx.globalAlpha = 1;
 }
@@ -4979,9 +5023,9 @@ function drawRuneSlots(g) {
 function weaponLines(i) {
   const c = CHARS[i], cls = SKILLS[BASIC_IDS[i]];
   const dmgs = [1, 3, 5].map(L => Math.round(c.atk * cls.mult(L))).join(' / ');
-  if (i === 0) return [`피해 (Lv1/3/5): ${dmgs}`, `공격 간격: ${c.atkSpd}초`, `포환 지름 ${(c.range * Math.sin(rad(c.angle / 2))).toFixed(0)}px · 비행 ${c.range}px`, '관통 + 약한 넉백'];
-  if (i === 1) return [`피해 (Lv1/3/5): ${dmgs}`, `공격 간격: ${c.atkSpd}초`, `범위 ${[1, 3, 5].map(L => (c.range * Sword.rangeMult(L)).toFixed(0)).join(' / ')}px · 각도 ${c.angle}°`, '검기 4~8개 · 적 탄 베어냄'];
-  return [`피해 (Lv1/3/5): ${dmgs}`, `공격 간격: ${c.atkSpd}초`, `범위 ${c.range}px · 각도 ${c.angle}°`, '손톱 4줄로 할퀴기'];
+  if (i === 0) return [`피해 (Lv1/3/5): ${dmgs}`, `공격 간격: ${c.atkSpd}초`, '먼 거리까지 관통하는 포환', '끝에서 폭발 · 약한 넉백'];
+  if (i === 1) return [`피해 (Lv1/3/5): ${dmgs}`, `공격 간격: ${c.atkSpd}초`, '넓은 부채꼴 · 레벨업마다 범위 증가', '검기 4~8개 · 적 탄 베어냄'];
+  return [`피해 (Lv1/3/5): ${dmgs}`, `공격 간격: ${c.atkSpd}초`, '가까운 거리 · 넓은 각도', '손톱 4줄로 할퀴기'];
 }
 function drawWeaponSelect(g) {
   dim(0.8);
